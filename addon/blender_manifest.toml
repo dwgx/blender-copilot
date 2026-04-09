@@ -1,0 +1,13 @@
+schema_version = "1.0.0"
+id = "blender_copilot"
+version = "1.0.0"
+name = "Blender Copilot"
+tagline = "AI-powered 3D creation via MCP - 70+ tools"
+maintainer = "DWGX <dwgx@users.noreply.github.com>"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:MIT"]
+
+[permissions]
+files = "Import/export 3D files and render output"
+network = "TCP socket connection for MCP server communication"

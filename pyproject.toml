@@ -1,0 +1,33 @@
+[project]
+name = "blender-copilot"
+version = "1.0.0"
+description = "The most comprehensive Blender MCP server - AI-powered 3D creation with 150+ tools"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "DWGX", email = "dwgx@users.noreply.github.com"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
+dependencies = [
+    "mcp[cli]>=1.3.0",
+]
+
+[project.scripts]
+blender-copilot = "blender_copilot.server:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[project.urls]
+"Homepage" = "https://github.com/dwgx/blender-copilot"
+"Issues" = "https://github.com/dwgx/blender-copilot/issues"
