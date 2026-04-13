@@ -1,8 +1,8 @@
 # Blender Copilot
 
-**The most comprehensive Blender MCP server — AI-powered 3D creation with 70+ tools.**
+**The most comprehensive Blender MCP server — AI-powered 3D creation with 135 tools.**
 
-最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，超過 70 種工具。
+最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，135 種工具。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -12,6 +12,8 @@
 
 ## Features / 功能特色
 
+### Core Tools (82 tools in `server.py`)
+
 | Category | Tools | Description |
 |----------|-------|-------------|
 | Scene Inspection | 4 | Get scene info, object details, analysis, viewport screenshots |
@@ -20,7 +22,7 @@
 | Object Management | 9 | Duplicate, delete, select, parent, visibility, hierarchy, rename |
 | Mesh Editing | 14 | Boolean, join, separate, subdivide, extrude, bevel, inset, decimate, remesh, normals, fill holes |
 | Modifiers | 5 | Add/apply/remove modifiers, linear array, circular array |
-| Materials | 6 | PBR materials, glass, metal, emission, list, batch assign |
+| Materials | 9 | PBR materials, glass, metal, emission, texture, Principled BSDF, list, batch assign |
 | World/Environment | 4 | Background color, HDRI, procedural sky, volumetric fog |
 | Camera & Lighting | 3 | Camera setup, studio lighting presets, custom lights |
 | Render & Export | 3 | Render to image, configure settings, export (glTF/OBJ/FBX/STL/USD/PLY) |
@@ -33,6 +35,55 @@
 | Code Execution | 1 | Sandboxed Python execution inside Blender |
 | Optimization | 1 | Clean orphan data, merge duplicate vertices |
 
+### Asset Integration (20 tools in `server.py`)
+
+| Source | Tools | Description |
+|--------|-------|-------------|
+| PolyHaven | 4 | Search/download free HDRIs, textures, and 3D models from polyhaven.com |
+| Sketchfab | 4 | Search/preview/download models from Sketchfab (API key required) |
+| Hyper3D (Rodin) | 4 | AI text/image-to-3D generation via Rodin API |
+| Hunyuan3D | 4 | Tencent's text/image-to-3D generation |
+| Wrappers | 4 | Convenience tools for text-to-3D and image-to-3D workflows |
+
+### VRC Avatar Pipeline (23 tools in `vrc_tools.py`)
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| Validation | 2 | Performance rank check (PC/Quest), export readiness |
+| Rigging | 5 | Humanoid armature, bone renaming, auto-weight, weight check |
+| Visemes & Eyes | 2 | 15 VRC visemes from base shapes, eye tracking setup |
+| PhysBones | 3 | Chain setup, physics config (hair/tail/ears/skirt), dynamics budget |
+| Accessories | 2 | Auto-align imported accessories, attach to bones |
+| Optimization | 3 | Smart decimate (preserves shape keys), material merge, texture atlas bake |
+| Avatar Features | 4 | Expression menu, contacts (headpat/boop), gestures, animator generation |
+| Import/Export | 2 | VRC-correct FBX import and export |
+
+### Advanced Mesh Tools (10 tools in `blender_master_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| bmesh_operation | Low-level BMesh operations (dissolve, collapse, merge, knife) |
+| topology_edge_loops | Edge loop analysis and insertion |
+| procedural_generate | Parametric mesh generation |
+| precision_weight_paint | Vertex-level weight painting with smoothstep interpolation |
+| build_material_nodes | Programmatic Shader Editor node trees |
+| smart_uv_tools | Advanced UV tools (LSCM, angle-based, pack islands) |
+| rig_tools | IK/FK chains, stretch-to, custom shapes |
+| retopology | Quad-based retopology from high-poly |
+| boolean_cleanup | Post-boolean topology repair |
+| create_facial_topology | Face topology from landmarks |
+
+### Blender Addon (112 commands, 2915 lines)
+
+The addon (`addon/__init__.py`) runs inside Blender and handles all commands via TCP.
+Includes full UI panels for:
+
+- **PolyHaven Browser** — search and import HDRIs, textures, models
+- **Sketchfab Browser** — search, preview, download models
+- **Hyper3D (Rodin)** — text/image to 3D generation with progress tracking
+- **Hunyuan3D** — Tencent's 3D generation pipeline
+- **Copilot Panel** — connection management, port config
+
 ## Architecture / 架構
 
 ```
@@ -40,9 +91,14 @@
 │  AI (Claude,    │ ◄──────────────► │  MCP Server      │ ◄────────────► │  Blender     │
 │  Cursor, etc.)  │                  │  (server.py)     │                │  Addon       │
 └─────────────────┘                  └──────────────────┘                └──────────────┘
+                                     │
+                                     ├── vrc_tools.py (23 VRC tools)
+                                     └── blender_master_tools.py (10 advanced tools)
 ```
 
-- **MCP Server** (`src/blender_copilot/server.py`): FastMCP server exposing 70+ tools via stdio transport
+- **MCP Server** (`src/blender_copilot/server.py`): FastMCP server exposing 135 tools via stdio transport
+- **VRC Tools** (`src/blender_copilot/vrc_tools.py`): VRChat avatar pipeline (registered via `register_vrc_tools`)
+- **Master Tools** (`src/blender_copilot/blender_master_tools.py`): Advanced mesh operations (registered via `register_master_tools`)
 - **Blender Addon** (`addon/__init__.py`): TCP socket server + CommandExecutor with `cmd_` dispatch pattern
 
 ## Installation / 安裝
@@ -160,6 +216,11 @@ def unregister():
 - **Python**: 3.10+
 - **OS**: Windows, macOS, Linux
 - **AI Clients**: Claude Code, Claude Desktop, Cursor, Windsurf, Cline, or any MCP-compatible client
+
+## Documentation / 文檔
+
+- `docs/MODELER_KNOWLEDGE_BASE.md` — VRChat avatar pipeline reference (performance ranks, export settings, weight painting rules)
+- `docs/MAYO_VRC_MANUAL.md` — Complete operation manual for the Mayo avatar project
 
 ## License / 授權
 
