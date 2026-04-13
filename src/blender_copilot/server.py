@@ -959,6 +959,290 @@ def optimize_scene(merge_threshold: float = 0.0001) -> dict:
 
 
 # =============================================================================
+#  MATERIALS (extended)
+# =============================================================================
+
+@mcp.tool()
+def set_material_color(
+    object_name: str, color: list[float],
+    material_name: str | None = None,
+) -> dict:
+    """Set or create a simple color material on an object.
+    color: [R,G,B] or [R,G,B,A] (0-1 range)."""
+    return send_command("set_material_color", {
+        "object_name": object_name, "color": color,
+        "material_name": material_name,
+    })
+
+
+@mcp.tool()
+def set_principled_bsdf(
+    object_name: str, material_name: str | None = None,
+    base_color: list[float] | None = None, metallic: float | None = None,
+    roughness: float | None = None, emission_color: list[float] | None = None,
+    emission_strength: float | None = None, alpha: float | None = None,
+    ior: float | None = None, transmission: float | None = None,
+    specular: float | None = None, clearcoat: float | None = None,
+    sheen: float | None = None, subsurface: float | None = None,
+    anisotropic: float | None = None,
+) -> dict:
+    """Full control over Principled BSDF PBR shader. Only set the parameters you need.
+    Colors as [R,G,B] or [R,G,B,A] 0.0-1.0. Scalars 0.0-1.0 except emission_strength and ior."""
+    return send_command("set_principled_bsdf", {
+        "object_name": object_name, "material_name": material_name,
+        "base_color": base_color, "metallic": metallic, "roughness": roughness,
+        "emission_color": emission_color, "emission_strength": emission_strength,
+        "alpha": alpha, "ior": ior, "transmission": transmission,
+        "specular": specular, "clearcoat": clearcoat,
+        "sheen": sheen, "subsurface": subsurface, "anisotropic": anisotropic,
+    })
+
+
+@mcp.tool()
+def set_texture(object_name: str, texture_id: str) -> dict:
+    """Apply a previously downloaded PolyHaven texture to an object.
+    texture_id must have been downloaded first via download_polyhaven_asset."""
+    return send_command("set_texture", {
+        "object_name": object_name, "texture_id": texture_id,
+    })
+
+
+# =============================================================================
+#  POLYHAVEN INTEGRATION
+# =============================================================================
+
+@mcp.tool()
+def get_polyhaven_status() -> dict:
+    """Check if PolyHaven integration is enabled in Blender.
+    PolyHaven provides free HDRIs, textures, and 3D models."""
+    return send_command("get_polyhaven_status")
+
+
+@mcp.tool()
+def get_polyhaven_categories(asset_type: str = "hdris") -> dict:
+    """Get categories for a PolyHaven asset type.
+    asset_type: hdris, textures, models, all."""
+    return send_command("get_polyhaven_categories", {"asset_type": asset_type})
+
+
+@mcp.tool()
+def search_polyhaven_assets(
+    asset_type: str = "all", categories: str | None = None,
+) -> dict:
+    """Search PolyHaven assets with optional filtering.
+    asset_type: hdris, textures, models, all.
+    categories: comma-separated list of categories to filter by."""
+    return send_command("search_polyhaven_assets", {
+        "asset_type": asset_type, "categories": categories,
+    })
+
+
+@mcp.tool()
+def download_polyhaven_asset(
+    asset_id: str, asset_type: str,
+    resolution: str = "1k", file_format: str | None = None,
+) -> dict:
+    """Download and import a PolyHaven asset into Blender.
+    asset_type: hdris, textures, models. resolution: 1k, 2k, 4k.
+    file_format: hdr/exr for HDRIs, jpg/png for textures, gltf/fbx for models."""
+    return send_command("download_polyhaven_asset", {
+        "asset_id": asset_id, "asset_type": asset_type,
+        "resolution": resolution, "file_format": file_format,
+    })
+
+
+# =============================================================================
+#  SKETCHFAB INTEGRATION
+# =============================================================================
+
+@mcp.tool()
+def get_sketchfab_status() -> dict:
+    """Check if Sketchfab integration is enabled in Blender.
+    Sketchfab has a wide variety of realistic downloadable 3D models."""
+    return send_command("get_sketchfab_status")
+
+
+@mcp.tool()
+def search_sketchfab_models(
+    query: str, categories: str | None = None,
+    count: int = 20, downloadable: bool = True,
+) -> dict:
+    """Search Sketchfab for 3D models.
+    query: search text. count: max results. downloadable: only downloadable models."""
+    return send_command("search_sketchfab_models", {
+        "query": query, "categories": categories,
+        "count": count, "downloadable": downloadable,
+    })
+
+
+@mcp.tool()
+def get_sketchfab_model_preview(uid: str) -> dict:
+    """Get a preview thumbnail of a Sketchfab model by UID.
+    Use before downloading to visually confirm the model."""
+    return send_command("get_sketchfab_model_preview", {"uid": uid})
+
+
+@mcp.tool()
+def download_sketchfab_model(uid: str, target_size: float) -> dict:
+    """Download and import a Sketchfab model. Scales to target_size (largest dimension in meters).
+    Examples: chair=1.0, table=0.75, car=4.5, person=1.7, small object=0.1-0.3."""
+    return send_command("download_sketchfab_model", {
+        "uid": uid, "normalize_size": True, "target_size": target_size,
+    })
+
+
+# =============================================================================
+#  HYPER3D RODIN INTEGRATION
+# =============================================================================
+
+@mcp.tool()
+def get_hyper3d_status() -> dict:
+    """Check if Hyper3D Rodin integration is enabled. Generates 3D models from text or images."""
+    return send_command("get_hyper3d_status")
+
+
+@mcp.tool()
+def generate_hyper3d_model_via_text(
+    text_prompt: str, bbox_condition: list[float] | None = None,
+) -> dict:
+    """Generate 3D model from text description using Hyper3D Rodin.
+    text_prompt: English description. bbox_condition: optional [L,W,H] ratio."""
+    return send_command("create_rodin_job", {
+        "text_prompt": text_prompt, "images": None,
+        "bbox_condition": bbox_condition,
+    })
+
+
+@mcp.tool()
+def generate_hyper3d_model_via_images(
+    input_image_paths: list[str] | None = None,
+    input_image_urls: list[str] | None = None,
+    bbox_condition: list[float] | None = None,
+) -> dict:
+    """Generate 3D model from images using Hyper3D Rodin.
+    Provide either input_image_paths (local) or input_image_urls (remote), not both.
+    bbox_condition: optional [L,W,H] ratio."""
+    import base64 as b64
+    from pathlib import Path
+    images = None
+    if input_image_paths:
+        images = []
+        for p in input_image_paths:
+            with open(p, "rb") as f:
+                images.append((Path(p).suffix, b64.b64encode(f.read()).decode("ascii")))
+    elif input_image_urls:
+        images = list(input_image_urls)
+    return send_command("create_rodin_job", {
+        "text_prompt": None, "images": images,
+        "bbox_condition": bbox_condition,
+    })
+
+
+@mcp.tool()
+def poll_rodin_job_status(
+    subscription_key: str | None = None, request_id: str | None = None,
+) -> dict:
+    """Poll Hyper3D Rodin generation status. Task is done when all statuses are 'Done'.
+    Provide subscription_key (MAIN_SITE) or request_id (FAL_AI) from the generate step."""
+    params = {}
+    if subscription_key:
+        params["subscription_key"] = subscription_key
+    elif request_id:
+        params["request_id"] = request_id
+    return send_command("poll_rodin_job_status", params)
+
+
+@mcp.tool()
+def import_generated_asset(
+    name: str, task_uuid: str | None = None, request_id: str | None = None,
+) -> dict:
+    """Import a Hyper3D Rodin generated asset after generation completes.
+    name: object name in scene. Provide task_uuid (MAIN_SITE) or request_id (FAL_AI)."""
+    params = {"name": name}
+    if task_uuid:
+        params["task_uuid"] = task_uuid
+    elif request_id:
+        params["request_id"] = request_id
+    return send_command("import_generated_asset", params)
+
+
+# =============================================================================
+#  HUNYUAN3D INTEGRATION
+# =============================================================================
+
+@mcp.tool()
+def get_hunyuan3d_status() -> dict:
+    """Check if Hunyuan3D integration is enabled. Generates 3D models from text or images."""
+    return send_command("get_hunyuan3d_status")
+
+
+@mcp.tool()
+def generate_hunyuan3d_model(
+    text_prompt: str | None = None, input_image_url: str | None = None,
+) -> dict:
+    """Generate 3D model using Hunyuan3D from text and/or image.
+    text_prompt: English/Chinese description. input_image_url: local or remote image URL."""
+    return send_command("create_hunyuan_job", {
+        "text_prompt": text_prompt, "image": input_image_url,
+    })
+
+
+@mcp.tool()
+def poll_hunyuan_job_status(job_id: str) -> dict:
+    """Poll Hunyuan3D generation status. Done when status is 'DONE'. In progress when 'RUN'."""
+    return send_command("poll_hunyuan_job_status", {"job_id": job_id})
+
+
+@mcp.tool()
+def import_generated_asset_hunyuan(name: str, zip_file_url: str) -> dict:
+    """Import Hunyuan3D generated asset after generation completes.
+    name: object name. zip_file_url: from the poll step when status is DONE."""
+    return send_command("import_generated_asset_hunyuan", {
+        "name": name, "zip_file_url": zip_file_url,
+    })
+
+
+# =============================================================================
+#  ASSET STRATEGY (prompt)
+# =============================================================================
+
+@mcp.prompt()
+def asset_creation_strategy() -> str:
+    """Preferred strategy for creating assets in Blender"""
+    return """When creating 3D content in Blender, always start by checking integrations:
+
+    0. Check scene with get_scene_info()
+    1. Check available integrations:
+       - PolyHaven: get_polyhaven_status() → HDRIs, textures, models
+       - Sketchfab: get_sketchfab_status() → realistic downloadable models
+       - Hyper3D Rodin: get_hyper3d_status() → AI text/image to 3D
+       - Hunyuan3D: get_hunyuan3d_status() → AI text/image to 3D
+
+    2. Asset source priority:
+       - Specific existing objects: Sketchfab → PolyHaven
+       - Generic objects/furniture: PolyHaven → Sketchfab
+       - Custom/unique items: Hyper3D Rodin or Hunyuan3D
+       - Environment lighting: PolyHaven HDRIs
+       - Materials/textures: PolyHaven textures
+
+    3. After importing, ALWAYS check world_bounding_box and adjust location/scale.
+
+    4. Only fall back to scripting when all integrations are disabled or unsuitable.
+    """
+
+
+# =============================================================================
+#  Register extension modules
+# =============================================================================
+
+from .vrc_tools import register_vrc_tools
+register_vrc_tools(mcp, send_command)
+
+from .blender_master_tools import register_master_tools
+register_master_tools(mcp, send_command)
+
+
+# =============================================================================
 #  Entry point
 # =============================================================================
 

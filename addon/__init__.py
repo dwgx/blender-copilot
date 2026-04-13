@@ -7,28 +7,41 @@ import bmesh
 import mathutils
 import json
 import math
+import re
 import threading
 import socket
 import time
+import requests
 import tempfile
 import traceback
 import os
 import shutil
 import zipfile
-from bpy.props import IntProperty, BoolProperty, StringProperty
-from contextlib import redirect_stdout, suppress
-import io
+import hashlib
+import hmac
 import base64
+from bpy.props import (IntProperty, BoolProperty, StringProperty,
+                       EnumProperty, FloatProperty)
+from contextlib import redirect_stdout, suppress
+from datetime import datetime
+import io
+import os.path as osp
 
 bl_info = {
     "name": "Blender Copilot",
     "author": "DWGX",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Copilot",
-    "description": "AI-powered 3D creation via MCP - 150+ tools",
+    "description": "AI-powered 3D creation via MCP - 150+ tools + asset integrations",
     "category": "Interface",
 }
+
+RODIN_FREE_TRIAL_KEY = "k9TcfFoEhNd9cCPP2guHAHHHkctZHIRhZDywZ1euGUXwihbYLpOjQhofby80NJez"
+
+# Add User-Agent as required by Poly Haven API
+REQ_HEADERS = requests.utils.default_headers()
+REQ_HEADERS.update({"User-Agent": "blender-copilot"})
 
 
 # =============================================================================
@@ -395,6 +408,17 @@ class CommandExecutor:
             raise ValueError(f"Object not found: {name}")
         return obj
 
+    @staticmethod
+    def _get_aabb(obj):
+        """Returns the world-space axis-aligned bounding box (AABB) of an object."""
+        if obj.type != 'MESH':
+            raise TypeError("Object must be a mesh")
+        local_bbox_corners = [mathutils.Vector(corner) for corner in obj.bound_box]
+        world_bbox_corners = [obj.matrix_world @ corner for corner in local_bbox_corners]
+        min_corner = mathutils.Vector(map(min, zip(*world_bbox_corners)))
+        max_corner = mathutils.Vector(map(max, zip(*world_bbox_corners)))
+        return [[*min_corner], [*max_corner]]
+
     def cmd_translate_object(self, name, x=0.0, y=0.0, z=0.0, relative=True):
         obj = self._get_obj(name)
         bpy.ops.ed.undo_push(message=f"Move {name}")
@@ -514,6 +538,10 @@ class CommandExecutor:
         roots = [o for o in bpy.context.scene.objects if not o.parent]
         return {"roots": [tree(r) for r in roots]}
 
+    # Alias for MCP compat
+    def cmd_get_object_hierarchy(self, name=None):
+        return self.cmd_get_hierarchy(name=name)
+
     def cmd_rename_object(self, name, new_name):
         obj = self._get_obj(name)
         obj.name = new_name
@@ -582,6 +610,10 @@ class CommandExecutor:
         bpy.ops.object.mode_set(mode='OBJECT')
         return {"name": name, "vertices": len(obj.data.vertices)}
 
+    # Alias for MCP compat
+    def cmd_subdivide_mesh(self, name, cuts=1, smooth=0.0):
+        return self.cmd_subdivide(name=name, cuts=cuts, smooth=smooth)
+
     def cmd_extrude_faces(self, name, offset=1.0):
         obj = self._get_obj(name)
         bpy.ops.object.select_all(action='DESELECT')
@@ -639,6 +671,10 @@ class CommandExecutor:
         bpy.context.view_layer.objects.active = obj
         bpy.ops.object.modifier_apply(modifier=mod.name)
         return {"name": name, "before": v0, "after": len(obj.data.vertices)}
+
+    # Alias for MCP compat
+    def cmd_decimate_mesh(self, name, ratio=0.5):
+        return self.cmd_decimate(name=name, ratio=ratio)
 
     def cmd_remesh(self, name, voxel_size=0.1, mode="VOXEL"):
         obj = self._get_obj(name)
@@ -810,16 +846,105 @@ class CommandExecutor:
                 obj.data.materials[0] = mat
         return {"object": name, "material": mat.name, "set": applied}
 
+    def cmd_set_material_color(self, object_name, color, material_name=None):
+        """Set/create a material with given RGBA color on an object."""
+        obj = bpy.data.objects.get(object_name)
+        if not obj:
+            raise ValueError(f"Object not found: {object_name}")
+        bpy.ops.ed.undo_push(message=f"Set material color on {object_name}")
+        if len(color) == 3:
+            color = list(color) + [1.0]
+        if material_name and material_name in bpy.data.materials:
+            mat = bpy.data.materials[material_name]
+        else:
+            mat_name = material_name or f"Material_{object_name}"
+            mat = bpy.data.materials.new(name=mat_name)
+        mat.use_nodes = True
+        bsdf = mat.node_tree.nodes.get("Principled BSDF")
+        if bsdf:
+            bsdf.inputs["Base Color"].default_value = tuple(color)
+        if obj.data and hasattr(obj.data, 'materials'):
+            if len(obj.data.materials) == 0:
+                obj.data.materials.append(mat)
+            else:
+                obj.data.materials[0] = mat
+        return {"object": object_name, "material": mat.name, "color": list(color)}
+
+    def cmd_set_principled_bsdf(self, object_name, material_name=None, base_color=None,
+                                metallic=None, roughness=None, emission_color=None,
+                                emission_strength=None, alpha=None, ior=None,
+                                transmission=None, specular=None, clearcoat=None,
+                                sheen=None, subsurface=None, anisotropic=None,
+                                normal_strength=None):
+        """Full control over Principled BSDF shader."""
+        obj = bpy.data.objects.get(object_name)
+        if not obj:
+            raise ValueError(f"Object not found: {object_name}")
+        bpy.ops.ed.undo_push(message=f"Set PBR material on {object_name}")
+        mat_name = material_name or f"PBR_{object_name}"
+        mat = bpy.data.materials.get(mat_name) or bpy.data.materials.new(name=mat_name)
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        bsdf = nodes.get("Principled BSDF")
+        if not bsdf:
+            bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        param_map = {
+            "Base Color": base_color, "Metallic": metallic, "Roughness": roughness,
+            "Alpha": alpha, "IOR": ior, "Transmission Weight": transmission,
+            "Specular IOR Level": specular, "Coat Weight": clearcoat,
+            "Sheen Weight": sheen, "Subsurface Weight": subsurface,
+            "Anisotropic": anisotropic,
+            "Emission Color": emission_color, "Emission Strength": emission_strength,
+        }
+        set_params = {}
+        for input_name, value in param_map.items():
+            if value is not None:
+                inp = bsdf.inputs.get(input_name)
+                if inp:
+                    if isinstance(value, (list, tuple)):
+                        if len(value) == 3:
+                            value = list(value) + [1.0]
+                        inp.default_value = tuple(value)
+                    else:
+                        inp.default_value = value
+                    set_params[input_name] = value
+        if alpha is not None and alpha < 1.0:
+            mat.blend_method = 'HASHED'
+        if obj.data and hasattr(obj.data, 'materials'):
+            if len(obj.data.materials) == 0:
+                obj.data.materials.append(mat)
+            else:
+                obj.data.materials[0] = mat
+        return {"object": object_name, "material": mat.name, "params_set": set_params}
+
     def cmd_create_glass(self, name, color=None, ior=1.45, roughness=0.0):
         return self.cmd_set_material(name, material_name=f"Glass_{name}",
+            base_color=color or [1,1,1,1], transmission=1.0, ior=ior, roughness=roughness)
+
+    # Alias for MCP compat
+    def cmd_create_glass_material(self, object_name, color=None, ior=1.45, roughness=0.0, material_name=None):
+        return self.cmd_set_principled_bsdf(object_name=object_name,
+            material_name=material_name or f"Glass_{object_name}",
             base_color=color or [1,1,1,1], transmission=1.0, ior=ior, roughness=roughness)
 
     def cmd_create_metal(self, name, color=None, roughness=0.3):
         return self.cmd_set_material(name, material_name=f"Metal_{name}",
             base_color=color or [0.8,0.8,0.8,1], metallic=1.0, roughness=roughness)
 
+    # Alias for MCP compat
+    def cmd_create_metal_material(self, object_name, color=None, roughness=0.3, material_name=None):
+        return self.cmd_set_principled_bsdf(object_name=object_name,
+            material_name=material_name or f"Metal_{object_name}",
+            base_color=color or [0.8,0.8,0.8,1], metallic=1.0, roughness=roughness)
+
     def cmd_create_emission(self, name, color=None, strength=10.0):
         return self.cmd_set_material(name, material_name=f"Emit_{name}",
+            emission_color=color or [1,1,1,1], emission_strength=strength)
+
+    # Alias for MCP compat
+    def cmd_create_emission_material(self, object_name, color=None, strength=10.0, material_name=None):
+        return self.cmd_set_principled_bsdf(object_name=object_name,
+            material_name=material_name or f"Emission_{object_name}",
             emission_color=color or [1,1,1,1], emission_strength=strength)
 
     def cmd_list_materials(self):
@@ -1320,6 +1445,10 @@ class CommandExecutor:
         c.mass = mass
         return {"name": name, "quality": quality}
 
+    # Alias for MCP compat
+    def cmd_add_cloth_simulation(self, name, quality=5, mass=0.3):
+        return self.cmd_add_cloth(name=name, quality=quality, mass=mass)
+
     def cmd_add_particles(self, name, count=1000, lifetime=50, type="EMITTER",
                           velocity=1.0, size=0.05):
         obj = self._get_obj(name)
@@ -1334,6 +1463,12 @@ class CommandExecutor:
         ps.normal_factor = velocity
         ps.particle_size = size
         return {"name": name, "count": count}
+
+    # Alias for MCP compat
+    def cmd_add_particle_system(self, name, count=1000, lifetime=50, type="EMITTER",
+                                velocity=1.0, size=0.05):
+        return self.cmd_add_particles(name=name, count=count, lifetime=lifetime,
+                                      type=type, velocity=velocity, size=size)
 
     def cmd_bake_physics(self, start=1, end=250):
         bpy.context.scene.frame_start = start
@@ -1420,6 +1555,1173 @@ class CommandExecutor:
                     log.append(f"{obj.name}: merged {v0 - v1} verts")
         return {"optimizations": log}
 
+    # =========================================================================
+    #  POLYHAVEN INTEGRATION
+    # =========================================================================
+
+    def cmd_get_polyhaven_status(self):
+        """Get the current status of PolyHaven integration"""
+        enabled = bpy.context.scene.copilot_use_polyhaven
+        if enabled:
+            return {"enabled": True, "message": "PolyHaven integration is enabled and ready to use."}
+        else:
+            return {
+                "enabled": False,
+                "message": "PolyHaven integration is currently disabled. Enable it in the Copilot panel sidebar."
+            }
+
+    def cmd_get_polyhaven_categories(self, asset_type):
+        """Get categories for a specific asset type from Polyhaven"""
+        if not bpy.context.scene.copilot_use_polyhaven:
+            return {"error": "PolyHaven integration is disabled. Enable it in the Copilot panel."}
+        try:
+            if asset_type not in ["hdris", "textures", "models", "all"]:
+                return {"error": f"Invalid asset type: {asset_type}. Must be one of: hdris, textures, models, all"}
+            response = requests.get(f"https://api.polyhaven.com/categories/{asset_type}", headers=REQ_HEADERS)
+            if response.status_code == 200:
+                return {"categories": response.json()}
+            else:
+                return {"error": f"API request failed with status code {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def cmd_search_polyhaven_assets(self, asset_type=None, categories=None):
+        """Search for assets from Polyhaven with optional filtering"""
+        if not bpy.context.scene.copilot_use_polyhaven:
+            return {"error": "PolyHaven integration is disabled. Enable it in the Copilot panel."}
+        try:
+            url = "https://api.polyhaven.com/assets"
+            params = {}
+            if asset_type and asset_type != "all":
+                if asset_type not in ["hdris", "textures", "models"]:
+                    return {"error": f"Invalid asset type: {asset_type}. Must be one of: hdris, textures, models, all"}
+                params["type"] = asset_type
+            if categories:
+                params["categories"] = categories
+            response = requests.get(url, params=params, headers=REQ_HEADERS)
+            if response.status_code == 200:
+                assets = response.json()
+                limited_assets = {}
+                for i, (key, value) in enumerate(assets.items()):
+                    if i >= 20:
+                        break
+                    limited_assets[key] = value
+                return {"assets": limited_assets, "total_count": len(assets), "returned_count": len(limited_assets)}
+            else:
+                return {"error": f"API request failed with status code {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def cmd_download_polyhaven_asset(self, asset_id, asset_type, resolution="1k", file_format=None):
+        """Download and import a PolyHaven asset"""
+        if not bpy.context.scene.copilot_use_polyhaven:
+            return {"error": "PolyHaven integration is disabled. Enable it in the Copilot panel."}
+        try:
+            files_response = requests.get(f"https://api.polyhaven.com/files/{asset_id}", headers=REQ_HEADERS)
+            if files_response.status_code != 200:
+                return {"error": f"Failed to get asset files: {files_response.status_code}"}
+            files_data = files_response.json()
+
+            if asset_type == "hdris":
+                if not file_format:
+                    file_format = "hdr"
+                if "hdri" in files_data and resolution in files_data["hdri"] and file_format in files_data["hdri"][resolution]:
+                    file_info = files_data["hdri"][resolution][file_format]
+                    file_url = file_info["url"]
+                    with tempfile.NamedTemporaryFile(suffix=f".{file_format}", delete=False) as tmp_file:
+                        response = requests.get(file_url, headers=REQ_HEADERS)
+                        if response.status_code != 200:
+                            return {"error": f"Failed to download HDRI: {response.status_code}"}
+                        tmp_file.write(response.content)
+                        tmp_path = tmp_file.name
+                    try:
+                        if not bpy.data.worlds:
+                            bpy.data.worlds.new("World")
+                        world = bpy.data.worlds[0]
+                        world.use_nodes = True
+                        node_tree = world.node_tree
+                        for node in node_tree.nodes:
+                            node_tree.nodes.remove(node)
+                        tex_coord = node_tree.nodes.new(type='ShaderNodeTexCoord')
+                        tex_coord.location = (-800, 0)
+                        mapping_node = node_tree.nodes.new(type='ShaderNodeMapping')
+                        mapping_node.location = (-600, 0)
+                        env_tex = node_tree.nodes.new(type='ShaderNodeTexEnvironment')
+                        env_tex.location = (-400, 0)
+                        env_tex.image = bpy.data.images.load(tmp_path)
+                        if file_format.lower() == 'exr':
+                            try:
+                                env_tex.image.colorspace_settings.name = 'Linear'
+                            except:
+                                env_tex.image.colorspace_settings.name = 'Non-Color'
+                        else:
+                            for color_space in ['Linear', 'Linear Rec.709', 'Non-Color']:
+                                try:
+                                    env_tex.image.colorspace_settings.name = color_space
+                                    break
+                                except:
+                                    continue
+                        background = node_tree.nodes.new(type='ShaderNodeBackground')
+                        background.location = (-200, 0)
+                        output = node_tree.nodes.new(type='ShaderNodeOutputWorld')
+                        output.location = (0, 0)
+                        node_tree.links.new(tex_coord.outputs['Generated'], mapping_node.inputs['Vector'])
+                        node_tree.links.new(mapping_node.outputs['Vector'], env_tex.inputs['Vector'])
+                        node_tree.links.new(env_tex.outputs['Color'], background.inputs['Color'])
+                        node_tree.links.new(background.outputs['Background'], output.inputs['Surface'])
+                        bpy.context.scene.world = world
+                        try:
+                            if os.path.exists(tmp_path):
+                                os.unlink(tmp_path)
+                        except:
+                            pass
+                        return {"success": True, "message": f"HDRI {asset_id} imported successfully", "image_name": env_tex.image.name}
+                    except Exception as e:
+                        return {"error": f"Failed to set up HDRI in Blender: {str(e)}"}
+                else:
+                    return {"error": "Requested resolution or format not available for this HDRI"}
+
+            elif asset_type == "textures":
+                if not file_format:
+                    file_format = "jpg"
+                downloaded_maps = {}
+                try:
+                    for map_type in files_data:
+                        if map_type not in ["blend", "gltf"]:
+                            if resolution in files_data[map_type] and file_format in files_data[map_type][resolution]:
+                                file_info = files_data[map_type][resolution][file_format]
+                                file_url = file_info["url"]
+                                with tempfile.NamedTemporaryFile(suffix=f".{file_format}", delete=False) as tmp_file:
+                                    response = requests.get(file_url, headers=REQ_HEADERS)
+                                    if response.status_code == 200:
+                                        tmp_file.write(response.content)
+                                        tmp_path = tmp_file.name
+                                        image = bpy.data.images.load(tmp_path)
+                                        image.name = f"{asset_id}_{map_type}.{file_format}"
+                                        image.pack()
+                                        if map_type in ['color', 'diffuse', 'albedo']:
+                                            try:
+                                                image.colorspace_settings.name = 'sRGB'
+                                            except:
+                                                pass
+                                        else:
+                                            try:
+                                                image.colorspace_settings.name = 'Non-Color'
+                                            except:
+                                                pass
+                                        downloaded_maps[map_type] = image
+                                        try:
+                                            os.unlink(tmp_path)
+                                        except:
+                                            pass
+                    if not downloaded_maps:
+                        return {"error": "No texture maps found for the requested resolution and format"}
+                    mat = bpy.data.materials.new(name=asset_id)
+                    mat.use_nodes = True
+                    nodes = mat.node_tree.nodes
+                    links = mat.node_tree.links
+                    for node in nodes:
+                        nodes.remove(node)
+                    output = nodes.new(type='ShaderNodeOutputMaterial')
+                    output.location = (300, 0)
+                    principled = nodes.new(type='ShaderNodeBsdfPrincipled')
+                    principled.location = (0, 0)
+                    links.new(principled.outputs[0], output.inputs[0])
+                    tex_coord = nodes.new(type='ShaderNodeTexCoord')
+                    tex_coord.location = (-800, 0)
+                    mapping_node = nodes.new(type='ShaderNodeMapping')
+                    mapping_node.location = (-600, 0)
+                    mapping_node.vector_type = 'TEXTURE'
+                    links.new(tex_coord.outputs['UV'], mapping_node.inputs['Vector'])
+                    x_pos = -400
+                    y_pos = 300
+                    for map_type, image in downloaded_maps.items():
+                        tex_node = nodes.new(type='ShaderNodeTexImage')
+                        tex_node.location = (x_pos, y_pos)
+                        tex_node.image = image
+                        if map_type.lower() in ['color', 'diffuse', 'albedo']:
+                            try:
+                                tex_node.image.colorspace_settings.name = 'sRGB'
+                            except:
+                                pass
+                        else:
+                            try:
+                                tex_node.image.colorspace_settings.name = 'Non-Color'
+                            except:
+                                pass
+                        links.new(mapping_node.outputs['Vector'], tex_node.inputs['Vector'])
+                        if map_type.lower() in ['color', 'diffuse', 'albedo']:
+                            links.new(tex_node.outputs['Color'], principled.inputs['Base Color'])
+                        elif map_type.lower() in ['roughness', 'rough']:
+                            links.new(tex_node.outputs['Color'], principled.inputs['Roughness'])
+                        elif map_type.lower() in ['metallic', 'metalness', 'metal']:
+                            links.new(tex_node.outputs['Color'], principled.inputs['Metallic'])
+                        elif map_type.lower() in ['normal', 'nor']:
+                            normal_map = nodes.new(type='ShaderNodeNormalMap')
+                            normal_map.location = (x_pos + 200, y_pos)
+                            links.new(tex_node.outputs['Color'], normal_map.inputs['Color'])
+                            links.new(normal_map.outputs['Normal'], principled.inputs['Normal'])
+                        elif map_type in ['displacement', 'disp', 'height']:
+                            disp_node = nodes.new(type='ShaderNodeDisplacement')
+                            disp_node.location = (x_pos + 200, y_pos - 200)
+                            links.new(tex_node.outputs['Color'], disp_node.inputs['Height'])
+                            links.new(disp_node.outputs['Displacement'], output.inputs['Displacement'])
+                        y_pos -= 250
+                    return {"success": True, "message": f"Texture {asset_id} imported as material",
+                            "material": mat.name, "maps": list(downloaded_maps.keys())}
+                except Exception as e:
+                    return {"error": f"Failed to process textures: {str(e)}"}
+
+            elif asset_type == "models":
+                if not file_format:
+                    file_format = "gltf"
+                if file_format in files_data and resolution in files_data[file_format]:
+                    file_info = files_data[file_format][resolution][file_format]
+                    file_url = file_info["url"]
+                    temp_dir = tempfile.mkdtemp()
+                    try:
+                        main_file_name = file_url.split("/")[-1]
+                        main_file_path = os.path.join(temp_dir, main_file_name)
+                        response = requests.get(file_url, headers=REQ_HEADERS)
+                        if response.status_code != 200:
+                            return {"error": f"Failed to download model: {response.status_code}"}
+                        with open(main_file_path, "wb") as f:
+                            f.write(response.content)
+                        if "include" in file_info and file_info["include"]:
+                            for include_path, include_info in file_info["include"].items():
+                                include_url = include_info["url"]
+                                include_file_path = os.path.join(temp_dir, include_path)
+                                os.makedirs(os.path.dirname(include_file_path), exist_ok=True)
+                                include_response = requests.get(include_url, headers=REQ_HEADERS)
+                                if include_response.status_code == 200:
+                                    with open(include_file_path, "wb") as f:
+                                        f.write(include_response.content)
+                        if file_format in ("gltf", "glb"):
+                            bpy.ops.import_scene.gltf(filepath=main_file_path)
+                        elif file_format == "fbx":
+                            bpy.ops.import_scene.fbx(filepath=main_file_path)
+                        elif file_format == "obj":
+                            bpy.ops.import_scene.obj(filepath=main_file_path)
+                        elif file_format == "blend":
+                            with bpy.data.libraries.load(main_file_path, link=False) as (data_from, data_to):
+                                data_to.objects = data_from.objects
+                            for obj in data_to.objects:
+                                if obj is not None:
+                                    bpy.context.collection.objects.link(obj)
+                        else:
+                            return {"error": f"Unsupported model format: {file_format}"}
+                        imported_objects = [obj.name for obj in bpy.context.selected_objects]
+                        return {"success": True, "message": f"Model {asset_id} imported successfully",
+                                "imported_objects": imported_objects}
+                    except Exception as e:
+                        return {"error": f"Failed to import model: {str(e)}"}
+                    finally:
+                        with suppress(Exception):
+                            shutil.rmtree(temp_dir)
+                else:
+                    return {"error": "Requested format or resolution not available for this model"}
+            else:
+                return {"error": f"Unsupported asset type: {asset_type}"}
+        except Exception as e:
+            return {"error": f"Failed to download asset: {str(e)}"}
+
+    def cmd_set_texture(self, object_name, texture_id):
+        """Apply a previously downloaded Polyhaven texture to an object"""
+        if not bpy.context.scene.copilot_use_polyhaven:
+            return {"error": "PolyHaven integration is disabled. Enable it in the Copilot panel."}
+        try:
+            obj = bpy.data.objects.get(object_name)
+            if not obj:
+                return {"error": f"Object not found: {object_name}"}
+            if not hasattr(obj, 'data') or not hasattr(obj.data, 'materials'):
+                return {"error": f"Object {object_name} cannot accept materials"}
+            texture_images = {}
+            for img in bpy.data.images:
+                if img.name.startswith(texture_id + "_"):
+                    map_type = img.name.split('_')[-1].split('.')[0]
+                    img.reload()
+                    if map_type.lower() in ['color', 'diffuse', 'albedo']:
+                        try:
+                            img.colorspace_settings.name = 'sRGB'
+                        except:
+                            pass
+                    else:
+                        try:
+                            img.colorspace_settings.name = 'Non-Color'
+                        except:
+                            pass
+                    if not img.packed_file:
+                        img.pack()
+                    texture_images[map_type] = img
+            if not texture_images:
+                return {"error": f"No texture images found for: {texture_id}. Please download the texture first."}
+            new_mat_name = f"{texture_id}_material_{object_name}"
+            existing_mat = bpy.data.materials.get(new_mat_name)
+            if existing_mat:
+                bpy.data.materials.remove(existing_mat)
+            new_mat = bpy.data.materials.new(name=new_mat_name)
+            new_mat.use_nodes = True
+            nodes = new_mat.node_tree.nodes
+            links = new_mat.node_tree.links
+            nodes.clear()
+            output = nodes.new(type='ShaderNodeOutputMaterial')
+            output.location = (600, 0)
+            principled = nodes.new(type='ShaderNodeBsdfPrincipled')
+            principled.location = (300, 0)
+            links.new(principled.outputs[0], output.inputs[0])
+            tex_coord = nodes.new(type='ShaderNodeTexCoord')
+            tex_coord.location = (-800, 0)
+            mapping_node = nodes.new(type='ShaderNodeMapping')
+            mapping_node.location = (-600, 0)
+            mapping_node.vector_type = 'TEXTURE'
+            links.new(tex_coord.outputs['UV'], mapping_node.inputs['Vector'])
+            x_pos = -400
+            y_pos = 300
+            for map_type, image in texture_images.items():
+                tex_node = nodes.new(type='ShaderNodeTexImage')
+                tex_node.location = (x_pos, y_pos)
+                tex_node.image = image
+                if map_type.lower() in ['color', 'diffuse', 'albedo']:
+                    try:
+                        tex_node.image.colorspace_settings.name = 'sRGB'
+                    except:
+                        pass
+                else:
+                    try:
+                        tex_node.image.colorspace_settings.name = 'Non-Color'
+                    except:
+                        pass
+                links.new(mapping_node.outputs['Vector'], tex_node.inputs['Vector'])
+                if map_type.lower() in ['color', 'diffuse', 'albedo']:
+                    links.new(tex_node.outputs['Color'], principled.inputs['Base Color'])
+                elif map_type.lower() in ['roughness', 'rough']:
+                    links.new(tex_node.outputs['Color'], principled.inputs['Roughness'])
+                elif map_type.lower() in ['metallic', 'metalness', 'metal']:
+                    links.new(tex_node.outputs['Color'], principled.inputs['Metallic'])
+                elif map_type.lower() in ['normal', 'nor', 'dx', 'gl']:
+                    normal_map = nodes.new(type='ShaderNodeNormalMap')
+                    normal_map.location = (x_pos + 200, y_pos)
+                    links.new(tex_node.outputs['Color'], normal_map.inputs['Color'])
+                    links.new(normal_map.outputs['Normal'], principled.inputs['Normal'])
+                elif map_type.lower() in ['displacement', 'disp', 'height']:
+                    disp_node = nodes.new(type='ShaderNodeDisplacement')
+                    disp_node.location = (x_pos + 200, y_pos - 200)
+                    disp_node.inputs['Scale'].default_value = 0.1
+                    links.new(tex_node.outputs['Color'], disp_node.inputs['Height'])
+                    links.new(disp_node.outputs['Displacement'], output.inputs['Displacement'])
+                y_pos -= 250
+            # Second pass: Connect nodes with proper handling
+            texture_nodes = {}
+            for node in nodes:
+                if node.type == 'TEX_IMAGE' and node.image:
+                    for map_type, image in texture_images.items():
+                        if node.image == image:
+                            texture_nodes[map_type] = node
+                            break
+            for map_name in ['color', 'diffuse', 'albedo']:
+                if map_name in texture_nodes:
+                    links.new(texture_nodes[map_name].outputs['Color'], principled.inputs['Base Color'])
+                    break
+            for map_name in ['roughness', 'rough']:
+                if map_name in texture_nodes:
+                    links.new(texture_nodes[map_name].outputs['Color'], principled.inputs['Roughness'])
+                    break
+            for map_name in ['metallic', 'metalness', 'metal']:
+                if map_name in texture_nodes:
+                    links.new(texture_nodes[map_name].outputs['Color'], principled.inputs['Metallic'])
+                    break
+            for map_name in ['gl', 'dx', 'nor']:
+                if map_name in texture_nodes:
+                    normal_map_node = nodes.new(type='ShaderNodeNormalMap')
+                    normal_map_node.location = (100, 100)
+                    links.new(texture_nodes[map_name].outputs['Color'], normal_map_node.inputs['Color'])
+                    links.new(normal_map_node.outputs['Normal'], principled.inputs['Normal'])
+                    break
+            for map_name in ['displacement', 'disp', 'height']:
+                if map_name in texture_nodes:
+                    disp_node = nodes.new(type='ShaderNodeDisplacement')
+                    disp_node.location = (300, -200)
+                    disp_node.inputs['Scale'].default_value = 0.1
+                    links.new(texture_nodes[map_name].outputs['Color'], disp_node.inputs['Height'])
+                    links.new(disp_node.outputs['Displacement'], output.inputs['Displacement'])
+                    break
+            # Handle ARM texture
+            if 'arm' in texture_nodes:
+                separate_rgb = nodes.new(type='ShaderNodeSeparateRGB')
+                separate_rgb.location = (-200, -100)
+                links.new(texture_nodes['arm'].outputs['Color'], separate_rgb.inputs['Image'])
+                if not any(mn in texture_nodes for mn in ['roughness', 'rough']):
+                    links.new(separate_rgb.outputs['G'], principled.inputs['Roughness'])
+                if not any(mn in texture_nodes for mn in ['metallic', 'metalness', 'metal']):
+                    links.new(separate_rgb.outputs['B'], principled.inputs['Metallic'])
+                base_color_node = None
+                for mn in ['color', 'diffuse', 'albedo']:
+                    if mn in texture_nodes:
+                        base_color_node = texture_nodes[mn]
+                        break
+                if base_color_node:
+                    mix_node = nodes.new(type='ShaderNodeMixRGB')
+                    mix_node.location = (100, 200)
+                    mix_node.blend_type = 'MULTIPLY'
+                    mix_node.inputs['Fac'].default_value = 0.8
+                    for link in base_color_node.outputs['Color'].links:
+                        if link.to_socket == principled.inputs['Base Color']:
+                            links.remove(link)
+                    links.new(base_color_node.outputs['Color'], mix_node.inputs[1])
+                    links.new(separate_rgb.outputs['R'], mix_node.inputs[2])
+                    links.new(mix_node.outputs['Color'], principled.inputs['Base Color'])
+            # Handle separate AO
+            if 'ao' in texture_nodes:
+                base_color_node = None
+                for mn in ['color', 'diffuse', 'albedo']:
+                    if mn in texture_nodes:
+                        base_color_node = texture_nodes[mn]
+                        break
+                if base_color_node:
+                    mix_node = nodes.new(type='ShaderNodeMixRGB')
+                    mix_node.location = (100, 200)
+                    mix_node.blend_type = 'MULTIPLY'
+                    mix_node.inputs['Fac'].default_value = 0.8
+                    for link in base_color_node.outputs['Color'].links:
+                        if link.to_socket == principled.inputs['Base Color']:
+                            links.remove(link)
+                    links.new(base_color_node.outputs['Color'], mix_node.inputs[1])
+                    links.new(texture_nodes['ao'].outputs['Color'], mix_node.inputs[2])
+                    links.new(mix_node.outputs['Color'], principled.inputs['Base Color'])
+            # Assign material
+            while len(obj.data.materials) > 0:
+                obj.data.materials.pop(index=0)
+            obj.data.materials.append(new_mat)
+            bpy.context.view_layer.objects.active = obj
+            obj.select_set(True)
+            bpy.context.view_layer.update()
+            return {
+                "success": True,
+                "message": f"Created new material and applied texture {texture_id} to {object_name}",
+                "material": new_mat.name,
+                "maps": list(texture_images.keys()),
+            }
+        except Exception as e:
+            traceback.print_exc()
+            return {"error": f"Failed to apply texture: {str(e)}"}
+
+    # =========================================================================
+    #  SKETCHFAB INTEGRATION
+    # =========================================================================
+
+    def cmd_get_sketchfab_status(self):
+        """Get the current status of Sketchfab integration"""
+        enabled = bpy.context.scene.copilot_use_sketchfab
+        api_key = bpy.context.scene.copilot_sketchfab_api_key
+        if api_key:
+            try:
+                headers = {"Authorization": f"Token {api_key}"}
+                response = requests.get("https://api.sketchfab.com/v3/me", headers=headers, timeout=30)
+                if response.status_code == 200:
+                    user_data = response.json()
+                    username = user_data.get("username", "Unknown user")
+                    return {"enabled": True, "message": f"Sketchfab integration is enabled. Logged in as: {username}"}
+                else:
+                    return {"enabled": False, "message": f"Sketchfab API key seems invalid. Status code: {response.status_code}"}
+            except requests.exceptions.Timeout:
+                return {"enabled": False, "message": "Timeout connecting to Sketchfab API."}
+            except Exception as e:
+                return {"enabled": False, "message": f"Error testing Sketchfab API key: {str(e)}"}
+        if enabled and not api_key:
+            return {"enabled": False, "message": "Sketchfab is enabled but API key is not set. Add it in the Copilot panel."}
+        return {"enabled": False, "message": "Sketchfab integration is disabled. Enable it in the Copilot panel."}
+
+    def cmd_search_sketchfab_models(self, query, categories=None, count=20, downloadable=True):
+        """Search for models on Sketchfab"""
+        if not bpy.context.scene.copilot_use_sketchfab:
+            return {"error": "Sketchfab integration is disabled. Enable it in the Copilot panel."}
+        try:
+            api_key = bpy.context.scene.copilot_sketchfab_api_key
+            if not api_key:
+                return {"error": "Sketchfab API key is not configured"}
+            params = {"type": "models", "q": query, "count": count,
+                      "downloadable": downloadable, "archives_flavours": False}
+            if categories:
+                params["categories"] = categories
+            headers = {"Authorization": f"Token {api_key}"}
+            response = requests.get("https://api.sketchfab.com/v3/search", headers=headers,
+                                    params=params, timeout=30)
+            if response.status_code == 401:
+                return {"error": "Authentication failed (401). Check your API key."}
+            if response.status_code != 200:
+                return {"error": f"API request failed with status code {response.status_code}"}
+            response_data = response.json()
+            if response_data is None:
+                return {"error": "Received empty response from Sketchfab API"}
+            results = response_data.get("results", [])
+            if not isinstance(results, list):
+                return {"error": f"Unexpected response format from Sketchfab API"}
+            return response_data
+        except requests.exceptions.Timeout:
+            return {"error": "Request timed out."}
+        except json.JSONDecodeError as e:
+            return {"error": f"Invalid JSON response: {str(e)}"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"error": str(e)}
+
+    def cmd_get_sketchfab_model_preview(self, uid):
+        """Get thumbnail preview image of a Sketchfab model by its UID"""
+        if not bpy.context.scene.copilot_use_sketchfab:
+            return {"error": "Sketchfab integration is disabled. Enable it in the Copilot panel."}
+        try:
+            api_key = bpy.context.scene.copilot_sketchfab_api_key
+            if not api_key:
+                return {"error": "Sketchfab API key is not configured"}
+            headers = {"Authorization": f"Token {api_key}"}
+            response = requests.get(f"https://api.sketchfab.com/v3/models/{uid}", headers=headers, timeout=30)
+            if response.status_code == 401:
+                return {"error": "Authentication failed (401). Check your API key."}
+            if response.status_code == 404:
+                return {"error": f"Model not found: {uid}"}
+            if response.status_code != 200:
+                return {"error": f"Failed to get model info: {response.status_code}"}
+            data = response.json()
+            thumbnails = data.get("thumbnails", {}).get("images", [])
+            if not thumbnails:
+                return {"error": "No thumbnail available for this model"}
+            selected_thumbnail = None
+            for thumb in thumbnails:
+                width = thumb.get("width", 0)
+                if 400 <= width <= 800:
+                    selected_thumbnail = thumb
+                    break
+            if not selected_thumbnail:
+                selected_thumbnail = thumbnails[0]
+            thumbnail_url = selected_thumbnail.get("url")
+            if not thumbnail_url:
+                return {"error": "Thumbnail URL not found"}
+            img_response = requests.get(thumbnail_url, timeout=30)
+            if img_response.status_code != 200:
+                return {"error": f"Failed to download thumbnail: {img_response.status_code}"}
+            image_data = base64.b64encode(img_response.content).decode('ascii')
+            content_type = img_response.headers.get("Content-Type", "")
+            img_format = "png" if ("png" in content_type or thumbnail_url.endswith(".png")) else "jpeg"
+            model_name = data.get("name", "Unknown")
+            author = data.get("user", {}).get("username", "Unknown")
+            return {
+                "success": True, "image_data": image_data, "format": img_format,
+                "model_name": model_name, "author": author, "uid": uid,
+                "thumbnail_width": selected_thumbnail.get("width"),
+                "thumbnail_height": selected_thumbnail.get("height"),
+            }
+        except requests.exceptions.Timeout:
+            return {"error": "Request timed out."}
+        except Exception as e:
+            traceback.print_exc()
+            return {"error": f"Failed to get model preview: {str(e)}"}
+
+    def cmd_download_sketchfab_model(self, uid, normalize_size=False, target_size=1.0):
+        """Download a model from Sketchfab by its UID"""
+        if not bpy.context.scene.copilot_use_sketchfab:
+            return {"error": "Sketchfab integration is disabled. Enable it in the Copilot panel."}
+        try:
+            api_key = bpy.context.scene.copilot_sketchfab_api_key
+            if not api_key:
+                return {"error": "Sketchfab API key is not configured"}
+            headers = {"Authorization": f"Token {api_key}"}
+            response = requests.get(f"https://api.sketchfab.com/v3/models/{uid}/download",
+                                    headers=headers, timeout=30)
+            if response.status_code == 401:
+                return {"error": "Authentication failed (401). Check your API key."}
+            if response.status_code != 200:
+                return {"error": f"Download request failed with status code {response.status_code}"}
+            data = response.json()
+            if data is None:
+                return {"error": "Received empty response from Sketchfab API"}
+            gltf_data = data.get("gltf")
+            if not gltf_data:
+                return {"error": "No gltf download URL available for this model."}
+            download_url = gltf_data.get("url")
+            if not download_url:
+                return {"error": "No download URL available. Make sure the model is downloadable."}
+            model_response = requests.get(download_url, timeout=60)
+            if model_response.status_code != 200:
+                return {"error": f"Model download failed with status code {model_response.status_code}"}
+            temp_dir = tempfile.mkdtemp()
+            zip_file_path = os.path.join(temp_dir, f"{uid}.zip")
+            with open(zip_file_path, "wb") as f:
+                f.write(model_response.content)
+            with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+                for file_info in zip_ref.infolist():
+                    file_path = file_info.filename
+                    target_path = os.path.join(temp_dir, os.path.normpath(file_path))
+                    abs_temp_dir = os.path.abspath(temp_dir)
+                    abs_target_path = os.path.abspath(target_path)
+                    if not abs_target_path.startswith(abs_temp_dir):
+                        with suppress(Exception):
+                            shutil.rmtree(temp_dir)
+                        return {"error": "Security issue: Zip contains path traversal attempt"}
+                    if ".." in file_path:
+                        with suppress(Exception):
+                            shutil.rmtree(temp_dir)
+                        return {"error": "Security issue: Zip contains directory traversal sequence"}
+                zip_ref.extractall(temp_dir)
+            gltf_files = [f for f in os.listdir(temp_dir) if f.endswith('.gltf') or f.endswith('.glb')]
+            if not gltf_files:
+                with suppress(Exception):
+                    shutil.rmtree(temp_dir)
+                return {"error": "No glTF file found in the downloaded model"}
+            main_file = os.path.join(temp_dir, gltf_files[0])
+            bpy.ops.import_scene.gltf(filepath=main_file)
+            imported_objects = list(bpy.context.selected_objects)
+            imported_object_names = [obj.name for obj in imported_objects]
+            with suppress(Exception):
+                shutil.rmtree(temp_dir)
+            root_objects = [obj for obj in imported_objects if obj.parent is None]
+
+            def get_all_mesh_children(obj):
+                meshes = []
+                if obj.type == 'MESH':
+                    meshes.append(obj)
+                for child in obj.children:
+                    meshes.extend(get_all_mesh_children(child))
+                return meshes
+
+            all_meshes = []
+            for obj in root_objects:
+                all_meshes.extend(get_all_mesh_children(obj))
+            if all_meshes:
+                all_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
+                all_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
+                for mesh_obj in all_meshes:
+                    for corner in mesh_obj.bound_box:
+                        world_corner = mesh_obj.matrix_world @ mathutils.Vector(corner)
+                        all_min.x = min(all_min.x, world_corner.x)
+                        all_min.y = min(all_min.y, world_corner.y)
+                        all_min.z = min(all_min.z, world_corner.z)
+                        all_max.x = max(all_max.x, world_corner.x)
+                        all_max.y = max(all_max.y, world_corner.y)
+                        all_max.z = max(all_max.z, world_corner.z)
+                dimensions = [all_max.x - all_min.x, all_max.y - all_min.y, all_max.z - all_min.z]
+                max_dimension = max(dimensions)
+                scale_applied = 1.0
+                if normalize_size and max_dimension > 0:
+                    scale_factor = target_size / max_dimension
+                    scale_applied = scale_factor
+                    for root in root_objects:
+                        root.scale = (root.scale.x * scale_factor, root.scale.y * scale_factor, root.scale.z * scale_factor)
+                    bpy.context.view_layer.update()
+                    all_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
+                    all_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
+                    for mesh_obj in all_meshes:
+                        for corner in mesh_obj.bound_box:
+                            world_corner = mesh_obj.matrix_world @ mathutils.Vector(corner)
+                            all_min.x = min(all_min.x, world_corner.x)
+                            all_min.y = min(all_min.y, world_corner.y)
+                            all_min.z = min(all_min.z, world_corner.z)
+                            all_max.x = max(all_max.x, world_corner.x)
+                            all_max.y = max(all_max.y, world_corner.y)
+                            all_max.z = max(all_max.z, world_corner.z)
+                    dimensions = [all_max.x - all_min.x, all_max.y - all_min.y, all_max.z - all_min.z]
+                world_bounding_box = [[all_min.x, all_min.y, all_min.z], [all_max.x, all_max.y, all_max.z]]
+            else:
+                world_bounding_box = None
+                dimensions = None
+                scale_applied = 1.0
+            result = {"success": True, "message": "Model imported successfully",
+                      "imported_objects": imported_object_names}
+            if world_bounding_box:
+                result["world_bounding_box"] = world_bounding_box
+            if dimensions:
+                result["dimensions"] = [round(d, 4) for d in dimensions]
+            if normalize_size:
+                result["scale_applied"] = round(scale_applied, 6)
+                result["normalized"] = True
+            return result
+        except requests.exceptions.Timeout:
+            return {"error": "Request timed out."}
+        except json.JSONDecodeError as e:
+            return {"error": f"Invalid JSON response: {str(e)}"}
+        except Exception as e:
+            traceback.print_exc()
+            return {"error": f"Failed to download model: {str(e)}"}
+
+    # =========================================================================
+    #  HYPER3D RODIN INTEGRATION
+    # =========================================================================
+
+    def cmd_get_hyper3d_status(self):
+        """Get the current status of Hyper3D Rodin integration"""
+        enabled = bpy.context.scene.copilot_use_hyper3d
+        if enabled:
+            if not bpy.context.scene.copilot_hyper3d_api_key:
+                return {"enabled": False, "message": "Hyper3D Rodin is enabled but API key is not set. Add it in the Copilot panel."}
+            mode = bpy.context.scene.copilot_hyper3d_mode
+            key_type = 'free_trial' if bpy.context.scene.copilot_hyper3d_api_key == RODIN_FREE_TRIAL_KEY else 'private'
+            return {"enabled": True, "message": f"Hyper3D Rodin is enabled. Mode: {mode}. Key type: {key_type}"}
+        return {"enabled": False, "message": "Hyper3D Rodin integration is disabled. Enable it in the Copilot panel."}
+
+    @staticmethod
+    def _clean_imported_glb(filepath, mesh_name=None):
+        """Import GLB and clean up the hierarchy"""
+        existing_objects = set(bpy.data.objects)
+        bpy.ops.import_scene.gltf(filepath=filepath)
+        bpy.context.view_layer.update()
+        imported_objects = list(set(bpy.data.objects) - existing_objects)
+        if not imported_objects:
+            raise Exception("No objects were imported from GLB file")
+        mesh_obj = None
+        if len(imported_objects) == 1 and imported_objects[0].type == 'MESH':
+            mesh_obj = imported_objects[0]
+        else:
+            if len(imported_objects) == 2:
+                empty_objs = [i for i in imported_objects if i.type == "EMPTY"]
+                if len(empty_objs) != 1:
+                    raise Exception("Expected an empty node with one mesh child or a single mesh object")
+                parent_obj = empty_objs.pop()
+                if len(parent_obj.children) == 1:
+                    potential_mesh = parent_obj.children[0]
+                    if potential_mesh.type == 'MESH':
+                        potential_mesh.parent = None
+                        bpy.data.objects.remove(parent_obj)
+                        mesh_obj = potential_mesh
+                    else:
+                        raise Exception("Child is not a mesh object")
+                else:
+                    raise Exception("Expected an empty node with one mesh child or a single mesh object")
+            else:
+                raise Exception(f"Unexpected import structure: {len(imported_objects)} objects imported")
+        try:
+            if mesh_obj and mesh_obj.name is not None and mesh_name:
+                mesh_obj.name = mesh_name
+                if mesh_obj.data.name is not None:
+                    mesh_obj.data.name = mesh_name
+        except:
+            pass
+        return mesh_obj
+
+    def cmd_create_rodin_job(self, text_prompt=None, images=None, bbox_condition=None):
+        """Create a Hyper3D Rodin generation job"""
+        if not bpy.context.scene.copilot_use_hyper3d:
+            return {"error": "Hyper3D Rodin integration is disabled. Enable it in the Copilot panel."}
+        if not bpy.context.scene.copilot_hyper3d_api_key:
+            return {"error": "Hyper3D Rodin API key is not set."}
+        mode = bpy.context.scene.copilot_hyper3d_mode
+        if mode == "MAIN_SITE":
+            return self._create_rodin_job_main_site(text_prompt=text_prompt, images=images, bbox_condition=bbox_condition)
+        elif mode == "FAL_AI":
+            return self._create_rodin_job_fal_ai(text_prompt=text_prompt, images=images, bbox_condition=bbox_condition)
+        return {"error": f"Unknown Hyper3D Rodin mode: {mode}"}
+
+    def _create_rodin_job_main_site(self, text_prompt=None, images=None, bbox_condition=None):
+        try:
+            if images is None:
+                images = []
+            files = [
+                *[("images", (f"{i:04d}{img_suffix}", img)) for i, (img_suffix, img) in enumerate(images)],
+                ("tier", (None, "Sketch")),
+                ("mesh_mode", (None, "Raw")),
+            ]
+            if text_prompt:
+                files.append(("prompt", (None, text_prompt)))
+            if bbox_condition:
+                files.append(("bbox_condition", (None, json.dumps(bbox_condition))))
+            response = requests.post(
+                "https://hyperhuman.deemos.com/api/v2/rodin",
+                headers={"Authorization": f"Bearer {bpy.context.scene.copilot_hyper3d_api_key}"},
+                files=files
+            )
+            return response.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _create_rodin_job_fal_ai(self, text_prompt=None, images=None, bbox_condition=None):
+        try:
+            req_data = {"tier": "Sketch"}
+            if images:
+                req_data["input_image_urls"] = images
+            if text_prompt:
+                req_data["prompt"] = text_prompt
+            if bbox_condition:
+                req_data["bbox_condition"] = bbox_condition
+            response = requests.post(
+                "https://queue.fal.run/fal-ai/hyper3d/rodin",
+                headers={
+                    "Authorization": f"Key {bpy.context.scene.copilot_hyper3d_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=req_data
+            )
+            return response.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def cmd_poll_rodin_job_status(self, subscription_key=None, request_id=None):
+        """Poll Hyper3D Rodin job status"""
+        if not bpy.context.scene.copilot_use_hyper3d:
+            return {"error": "Hyper3D Rodin integration is disabled."}
+        mode = bpy.context.scene.copilot_hyper3d_mode
+        if mode == "MAIN_SITE":
+            if not subscription_key:
+                return {"error": "subscription_key is required for MAIN_SITE mode"}
+            response = requests.post(
+                "https://hyperhuman.deemos.com/api/v2/status",
+                headers={"Authorization": f"Bearer {bpy.context.scene.copilot_hyper3d_api_key}"},
+                json={"subscription_key": subscription_key},
+            )
+            data = response.json()
+            return {"status_list": [i["status"] for i in data["jobs"]]}
+        elif mode == "FAL_AI":
+            if not request_id:
+                return {"error": "request_id is required for FAL_AI mode"}
+            response = requests.get(
+                f"https://queue.fal.run/fal-ai/hyper3d/requests/{request_id}/status",
+                headers={"Authorization": f"KEY {bpy.context.scene.copilot_hyper3d_api_key}"},
+            )
+            return response.json()
+        return {"error": f"Unknown mode: {mode}"}
+
+    def cmd_import_generated_asset(self, task_uuid=None, request_id=None, name="GeneratedAsset"):
+        """Import a generated asset from Hyper3D Rodin"""
+        if not bpy.context.scene.copilot_use_hyper3d:
+            return {"error": "Hyper3D Rodin integration is disabled."}
+        mode = bpy.context.scene.copilot_hyper3d_mode
+        if mode == "MAIN_SITE":
+            if not task_uuid:
+                return {"error": "task_uuid is required for MAIN_SITE mode"}
+            return self._import_generated_asset_main_site(task_uuid=task_uuid, name=name)
+        elif mode == "FAL_AI":
+            if not request_id:
+                return {"error": "request_id is required for FAL_AI mode"}
+            return self._import_generated_asset_fal_ai(request_id=request_id, name=name)
+        return {"error": f"Unknown mode: {mode}"}
+
+    def _import_generated_asset_main_site(self, task_uuid, name):
+        response = requests.post(
+            "https://hyperhuman.deemos.com/api/v2/download",
+            headers={"Authorization": f"Bearer {bpy.context.scene.copilot_hyper3d_api_key}"},
+            json={'task_uuid': task_uuid}
+        )
+        data_ = response.json()
+        temp_file = None
+        for i in data_["list"]:
+            if i["name"].endswith(".glb"):
+                temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=task_uuid, suffix=".glb")
+                try:
+                    response = requests.get(i["url"], stream=True)
+                    response.raise_for_status()
+                    for chunk in response.iter_content(chunk_size=8192):
+                        temp_file.write(chunk)
+                    temp_file.close()
+                except Exception as e:
+                    temp_file.close()
+                    os.unlink(temp_file.name)
+                    return {"succeed": False, "error": str(e)}
+                break
+        else:
+            return {"succeed": False, "error": "Generation failed. Make sure all jobs are done."}
+        try:
+            obj = self._clean_imported_glb(filepath=temp_file.name, mesh_name=name)
+            result = {
+                "name": obj.name, "type": obj.type,
+                "location": [obj.location.x, obj.location.y, obj.location.z],
+                "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+                "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
+            }
+            if obj.type == "MESH":
+                result["world_bounding_box"] = self._get_aabb(obj)
+            return {"succeed": True, **result}
+        except Exception as e:
+            return {"succeed": False, "error": str(e)}
+
+    def _import_generated_asset_fal_ai(self, request_id, name):
+        response = requests.get(
+            f"https://queue.fal.run/fal-ai/hyper3d/requests/{request_id}",
+            headers={"Authorization": f"Key {bpy.context.scene.copilot_hyper3d_api_key}"}
+        )
+        data_ = response.json()
+        temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=request_id, suffix=".glb")
+        try:
+            response = requests.get(data_["model_mesh"]["url"], stream=True)
+            response.raise_for_status()
+            for chunk in response.iter_content(chunk_size=8192):
+                temp_file.write(chunk)
+            temp_file.close()
+        except Exception as e:
+            temp_file.close()
+            os.unlink(temp_file.name)
+            return {"succeed": False, "error": str(e)}
+        try:
+            obj = self._clean_imported_glb(filepath=temp_file.name, mesh_name=name)
+            result = {
+                "name": obj.name, "type": obj.type,
+                "location": [obj.location.x, obj.location.y, obj.location.z],
+                "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+                "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
+            }
+            if obj.type == "MESH":
+                result["world_bounding_box"] = self._get_aabb(obj)
+            return {"succeed": True, **result}
+        except Exception as e:
+            return {"succeed": False, "error": str(e)}
+
+    # =========================================================================
+    #  HUNYUAN3D INTEGRATION
+    # =========================================================================
+
+    def cmd_get_hunyuan3d_status(self):
+        """Get the current status of Hunyuan3D integration"""
+        enabled = bpy.context.scene.copilot_use_hunyuan3d
+        hunyuan3d_mode = bpy.context.scene.copilot_hunyuan3d_mode
+        if enabled:
+            if hunyuan3d_mode == "OFFICIAL_API":
+                if not bpy.context.scene.copilot_hunyuan3d_secret_id or not bpy.context.scene.copilot_hunyuan3d_secret_key:
+                    return {"enabled": False, "mode": hunyuan3d_mode,
+                            "message": "Hunyuan3D is enabled but SecretId/SecretKey is not set. Add them in the Copilot panel."}
+            elif hunyuan3d_mode == "LOCAL_API":
+                if not bpy.context.scene.copilot_hunyuan3d_api_url:
+                    return {"enabled": False, "mode": hunyuan3d_mode,
+                            "message": "Hunyuan3D is enabled but API URL is not set. Add it in the Copilot panel."}
+            else:
+                return {"enabled": False, "message": "Hunyuan3D mode is not supported."}
+            return {"enabled": True, "mode": hunyuan3d_mode, "message": "Hunyuan3D integration is enabled and ready to use."}
+        return {"enabled": False, "message": "Hunyuan3D integration is disabled. Enable it in the Copilot panel."}
+
+    @staticmethod
+    def _get_tencent_cloud_sign_headers(method, path, headParams, data, service, region, secret_id, secret_key, host=None):
+        """Generate Tencent Cloud API signature headers"""
+        timestamp = int(time.time())
+        date = datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
+        if not host:
+            host = f"{service}.tencentcloudapi.com"
+        endpoint = f"https://{host}"
+        payload_str = json.dumps(data)
+        canonical_uri = path
+        canonical_querystring = ""
+        ct = "application/json; charset=utf-8"
+        canonical_headers = f"content-type:{ct}\nhost:{host}\nx-tc-action:{headParams.get('Action', '').lower()}\n"
+        signed_headers = "content-type;host;x-tc-action"
+        hashed_request_payload = hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
+        canonical_request = (method + "\n" + canonical_uri + "\n" + canonical_querystring + "\n" +
+                             canonical_headers + "\n" + signed_headers + "\n" + hashed_request_payload)
+        credential_scope = f"{date}/{service}/tc3_request"
+        hashed_canonical_request = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+        string_to_sign = ("TC3-HMAC-SHA256" + "\n" + str(timestamp) + "\n" +
+                          credential_scope + "\n" + hashed_canonical_request)
+
+        def sign(key, msg):
+            return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+        secret_date = sign(("TC3" + secret_key).encode("utf-8"), date)
+        secret_service = sign(secret_date, service)
+        secret_signing = sign(secret_service, "tc3_request")
+        signature = hmac.new(secret_signing, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+        authorization = ("TC3-HMAC-SHA256 Credential=" + secret_id + "/" + credential_scope +
+                          ", SignedHeaders=" + signed_headers + ", Signature=" + signature)
+        headers = {
+            "Authorization": authorization,
+            "Content-Type": "application/json; charset=utf-8",
+            "Host": host,
+            "X-TC-Action": headParams.get("Action", ""),
+            "X-TC-Timestamp": str(timestamp),
+            "X-TC-Version": headParams.get("Version", ""),
+            "X-TC-Region": region,
+        }
+        return headers, endpoint
+
+    def cmd_create_hunyuan_job(self, text_prompt=None, image=None):
+        """Create a Hunyuan3D generation job"""
+        if not bpy.context.scene.copilot_use_hunyuan3d:
+            return {"error": "Hunyuan3D integration is disabled. Enable it in the Copilot panel."}
+        mode = bpy.context.scene.copilot_hunyuan3d_mode
+        if mode == "OFFICIAL_API":
+            return self._create_hunyuan_job_official(text_prompt=text_prompt, image=image)
+        elif mode == "LOCAL_API":
+            return self._create_hunyuan_job_local(text_prompt=text_prompt, image=image)
+        return {"error": f"Unknown Hunyuan3D mode: {mode}"}
+
+    def _create_hunyuan_job_official(self, text_prompt=None, image=None):
+        try:
+            secret_id = bpy.context.scene.copilot_hunyuan3d_secret_id
+            secret_key = bpy.context.scene.copilot_hunyuan3d_secret_key
+            if not secret_id or not secret_key:
+                return {"error": "SecretId or SecretKey is not given"}
+            if not text_prompt and not image:
+                return {"error": "Prompt or Image is required"}
+            if text_prompt and image:
+                return {"error": "Prompt and Image cannot be provided simultaneously"}
+            service = "hunyuan"
+            action = "SubmitHunyuanTo3DJob"
+            version = "2023-09-01"
+            region = "ap-guangzhou"
+            headParams = {"Action": action, "Version": version, "Region": region}
+            data = {"Num": 1}
+            if text_prompt:
+                if len(text_prompt) > 200:
+                    return {"error": "Prompt exceeds 200 characters limit"}
+                data["Prompt"] = text_prompt
+            if image:
+                if re.match(r'^https?://', image, re.IGNORECASE) is not None:
+                    data["ImageUrl"] = image
+                else:
+                    try:
+                        with open(image, "rb") as f:
+                            image_base64 = base64.b64encode(f.read()).decode("ascii")
+                        data["ImageBase64"] = image_base64
+                    except Exception as e:
+                        return {"error": f"Image encoding failed: {str(e)}"}
+            headers, endpoint = self._get_tencent_cloud_sign_headers(
+                "POST", "/", headParams, data, service, region, secret_id, secret_key)
+            response = requests.post(endpoint, headers=headers, data=json.dumps(data))
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"API request failed with status {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _create_hunyuan_job_local(self, text_prompt=None, image=None):
+        try:
+            base_url = bpy.context.scene.copilot_hunyuan3d_api_url.rstrip('/')
+            octree_resolution = bpy.context.scene.copilot_hunyuan3d_octree_resolution
+            num_inference_steps = bpy.context.scene.copilot_hunyuan3d_num_inference_steps
+            guidance_scale = bpy.context.scene.copilot_hunyuan3d_guidance_scale
+            texture = bpy.context.scene.copilot_hunyuan3d_texture
+            if not base_url:
+                return {"error": "API URL is not given"}
+            if not text_prompt and not image:
+                return {"error": "Prompt or Image is required"}
+            data = {
+                "octree_resolution": octree_resolution,
+                "num_inference_steps": num_inference_steps,
+                "guidance_scale": guidance_scale,
+                "texture": texture,
+            }
+            if text_prompt:
+                data["text"] = text_prompt
+            if image:
+                if re.match(r'^https?://', image, re.IGNORECASE) is not None:
+                    try:
+                        resImg = requests.get(image)
+                        resImg.raise_for_status()
+                        image_base64 = base64.b64encode(resImg.content).decode("ascii")
+                        data["image"] = image_base64
+                    except Exception as e:
+                        return {"error": f"Failed to download or encode image: {str(e)}"}
+                else:
+                    try:
+                        with open(image, "rb") as f:
+                            image_base64 = base64.b64encode(f.read()).decode("ascii")
+                        data["image"] = image_base64
+                    except Exception as e:
+                        return {"error": f"Image encoding failed: {str(e)}"}
+            response = requests.post(f"{base_url}/generate", json=data)
+            if response.status_code != 200:
+                return {"error": f"Generation failed: {response.text}"}
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".glb") as temp_file:
+                temp_file.write(response.content)
+                temp_file_name = temp_file.name
+            try:
+                bpy.ops.import_scene.gltf(filepath=temp_file_name)
+            finally:
+                if os.path.exists(temp_file_name):
+                    os.unlink(temp_file_name)
+            return {"status": "DONE", "message": "Generation and import succeeded"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def cmd_poll_hunyuan_job_status(self, job_id):
+        """Poll Hunyuan3D job status"""
+        if not bpy.context.scene.copilot_use_hunyuan3d:
+            return {"error": "Hunyuan3D integration is disabled."}
+        try:
+            secret_id = bpy.context.scene.copilot_hunyuan3d_secret_id
+            secret_key = bpy.context.scene.copilot_hunyuan3d_secret_key
+            if not secret_id or not secret_key:
+                return {"error": "SecretId or SecretKey is not given"}
+            if not job_id:
+                return {"error": "JobId is required"}
+            service = "hunyuan"
+            action = "QueryHunyuanTo3DJob"
+            version = "2023-09-01"
+            region = "ap-guangzhou"
+            headParams = {"Action": action, "Version": version, "Region": region}
+            clean_job_id = job_id.removeprefix("job_")
+            data = {"JobId": clean_job_id}
+            headers, endpoint = self._get_tencent_cloud_sign_headers(
+                "POST", "/", headParams, data, service, region, secret_id, secret_key)
+            response = requests.post(endpoint, headers=headers, data=json.dumps(data))
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"API request failed with status {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def cmd_import_generated_asset_hunyuan(self, name=None, zip_file_url=None):
+        """Import a generated Hunyuan3D asset from a ZIP URL"""
+        if not bpy.context.scene.copilot_use_hunyuan3d:
+            return {"error": "Hunyuan3D integration is disabled."}
+        if not zip_file_url:
+            return {"error": "Zip file URL not provided"}
+        if not re.match(r'^https?://', zip_file_url, re.IGNORECASE):
+            return {"error": "Invalid URL format. Must start with http:// or https://"}
+        temp_dir = tempfile.mkdtemp(prefix="copilot_hunyuan_obj_")
+        zip_file_path = osp.join(temp_dir, "model.zip")
+        obj_file_path = osp.join(temp_dir, "model.obj")
+        try:
+            zip_response = requests.get(zip_file_url, stream=True)
+            zip_response.raise_for_status()
+            with open(zip_file_path, "wb") as f:
+                for chunk in zip_response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
+                zip_ref.extractall(temp_dir)
+            for file in os.listdir(temp_dir):
+                if file.endswith(".obj"):
+                    obj_file_path = osp.join(temp_dir, file)
+            if not osp.exists(obj_file_path):
+                return {"succeed": False, "error": "OBJ file not found after extraction"}
+            if bpy.app.version >= (4, 0, 0):
+                bpy.ops.wm.obj_import(filepath=obj_file_path)
+            else:
+                bpy.ops.import_scene.obj(filepath=obj_file_path)
+            imported_objs = [obj for obj in bpy.context.selected_objects if obj.type == 'MESH']
+            if not imported_objs:
+                return {"succeed": False, "error": "No mesh objects imported"}
+            obj = imported_objs[0]
+            if name:
+                obj.name = name
+            result = {
+                "name": obj.name, "type": obj.type,
+                "location": [obj.location.x, obj.location.y, obj.location.z],
+                "rotation": [obj.rotation_euler.x, obj.rotation_euler.y, obj.rotation_euler.z],
+                "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
+            }
+            if obj.type == "MESH":
+                result["world_bounding_box"] = self._get_aabb(obj)
+            return {"succeed": True, **result}
+        except Exception as e:
+            return {"succeed": False, "error": str(e)}
+        finally:
+            try:
+                if os.path.exists(zip_file_path):
+                    os.remove(zip_file_path)
+                if os.path.exists(obj_file_path):
+                    os.remove(obj_file_path)
+            except Exception as e:
+                print(f"Failed to clean up temporary directory {temp_dir}: {e}")
+
+    # =========================================================================
+    #  HYPER3D TEXT/IMAGE GENERATION (server-side command aliases)
+    # =========================================================================
+
+    def cmd_generate_hyper3d_model_via_text(self, **kwargs):
+        """Alias for create_rodin_job with text prompt"""
+        return self.cmd_create_rodin_job(**kwargs)
+
+    def cmd_generate_hyper3d_model_via_images(self, **kwargs):
+        """Alias for create_rodin_job with images"""
+        return self.cmd_create_rodin_job(**kwargs)
+
+    def cmd_generate_hunyuan3d_model(self, **kwargs):
+        """Alias for create_hunyuan_job"""
+        return self.cmd_create_hunyuan_job(**kwargs)
+
 
 # =============================================================================
 #  Blender UI
@@ -1436,11 +2738,47 @@ class COPILOT_PT_Panel(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
         layout.prop(scene, "copilot_port")
+
         if not scene.copilot_running:
             layout.operator("copilot.start", text="Connect to AI", icon='PLAY')
         else:
             layout.operator("copilot.stop", text="Disconnect", icon='PAUSE')
             layout.label(text=f"Port {scene.copilot_port}", icon='CHECKMARK')
+
+        layout.separator()
+        layout.label(text="Asset Integrations:", icon='IMPORT')
+
+        # PolyHaven
+        layout.prop(scene, "copilot_use_polyhaven", text="Use assets from Poly Haven")
+
+        # Hyper3D Rodin
+        layout.prop(scene, "copilot_use_hyper3d", text="Use Hyper3D Rodin 3D generation")
+        if scene.copilot_use_hyper3d:
+            box = layout.box()
+            box.prop(scene, "copilot_hyper3d_mode", text="Mode")
+            box.prop(scene, "copilot_hyper3d_api_key", text="API Key")
+            box.operator("copilot.set_hyper3d_free_trial_key", text="Set Free Trial API Key")
+
+        # Sketchfab
+        layout.prop(scene, "copilot_use_sketchfab", text="Use assets from Sketchfab")
+        if scene.copilot_use_sketchfab:
+            box = layout.box()
+            box.prop(scene, "copilot_sketchfab_api_key", text="API Key")
+
+        # Hunyuan3D
+        layout.prop(scene, "copilot_use_hunyuan3d", text="Use Tencent Hunyuan 3D generation")
+        if scene.copilot_use_hunyuan3d:
+            box = layout.box()
+            box.prop(scene, "copilot_hunyuan3d_mode", text="Mode")
+            if scene.copilot_hunyuan3d_mode == 'OFFICIAL_API':
+                box.prop(scene, "copilot_hunyuan3d_secret_id", text="SecretId")
+                box.prop(scene, "copilot_hunyuan3d_secret_key", text="SecretKey")
+            if scene.copilot_hunyuan3d_mode == 'LOCAL_API':
+                box.prop(scene, "copilot_hunyuan3d_api_url", text="API URL")
+                box.prop(scene, "copilot_hunyuan3d_octree_resolution", text="Octree Resolution")
+                box.prop(scene, "copilot_hunyuan3d_num_inference_steps", text="Inference Steps")
+                box.prop(scene, "copilot_hunyuan3d_guidance_scale", text="Guidance Scale")
+                box.prop(scene, "copilot_hunyuan3d_texture", text="Generate Texture")
 
 
 class COPILOT_OT_Start(bpy.types.Operator):
@@ -1467,12 +2805,70 @@ class COPILOT_OT_Stop(bpy.types.Operator):
         return {'FINISHED'}
 
 
-CLASSES = [COPILOT_PT_Panel, COPILOT_OT_Start, COPILOT_OT_Stop]
+class COPILOT_OT_SetHyper3DFreeTrialKey(bpy.types.Operator):
+    bl_idname = "copilot.set_hyper3d_free_trial_key"
+    bl_label = "Set Free Trial API Key"
+
+    def execute(self, context):
+        context.scene.copilot_hyper3d_api_key = RODIN_FREE_TRIAL_KEY
+        context.scene.copilot_hyper3d_mode = 'MAIN_SITE'
+        self.report({'INFO'}, "Free trial API key set successfully!")
+        return {'FINISHED'}
+
+
+CLASSES = [COPILOT_PT_Panel, COPILOT_OT_Start, COPILOT_OT_Stop, COPILOT_OT_SetHyper3DFreeTrialKey]
 
 
 def register():
+    # Core properties
     bpy.types.Scene.copilot_port = IntProperty(name="Port", default=9876, min=1024, max=65535)
     bpy.types.Scene.copilot_running = BoolProperty(name="Running", default=False)
+
+    # PolyHaven
+    bpy.types.Scene.copilot_use_polyhaven = BoolProperty(
+        name="Use Poly Haven", description="Enable Poly Haven asset integration", default=False)
+
+    # Hyper3D Rodin
+    bpy.types.Scene.copilot_use_hyper3d = BoolProperty(
+        name="Use Hyper3D Rodin", description="Enable Hyper3D Rodin generation integration", default=False)
+    bpy.types.Scene.copilot_hyper3d_mode = EnumProperty(
+        name="Rodin Mode", description="Choose the platform used to call Rodin APIs",
+        items=[("MAIN_SITE", "hyper3d.ai", "hyper3d.ai"), ("FAL_AI", "fal.ai", "fal.ai")],
+        default="MAIN_SITE")
+    bpy.types.Scene.copilot_hyper3d_api_key = StringProperty(
+        name="Hyper3D API Key", subtype="PASSWORD", description="API Key provided by Hyper3D", default="")
+
+    # Sketchfab
+    bpy.types.Scene.copilot_use_sketchfab = BoolProperty(
+        name="Use Sketchfab", description="Enable Sketchfab asset integration", default=False)
+    bpy.types.Scene.copilot_sketchfab_api_key = StringProperty(
+        name="Sketchfab API Key", subtype="PASSWORD", description="API Key provided by Sketchfab", default="")
+
+    # Hunyuan3D
+    bpy.types.Scene.copilot_use_hunyuan3d = BoolProperty(
+        name="Use Hunyuan 3D", description="Enable Hunyuan3D asset integration", default=False)
+    bpy.types.Scene.copilot_hunyuan3d_mode = EnumProperty(
+        name="Hunyuan3D Mode", description="Choose local or official APIs",
+        items=[("LOCAL_API", "Local API", "Local API"), ("OFFICIAL_API", "Official API", "Official API")],
+        default="LOCAL_API")
+    bpy.types.Scene.copilot_hunyuan3d_secret_id = StringProperty(
+        name="Hunyuan 3D SecretId", description="SecretId from Tencent Cloud", default="")
+    bpy.types.Scene.copilot_hunyuan3d_secret_key = StringProperty(
+        name="Hunyuan 3D SecretKey", subtype="PASSWORD", description="SecretKey from Tencent Cloud", default="")
+    bpy.types.Scene.copilot_hunyuan3d_api_url = StringProperty(
+        name="API URL", description="URL of the Hunyuan 3D API service", default="http://localhost:8081")
+    bpy.types.Scene.copilot_hunyuan3d_octree_resolution = IntProperty(
+        name="Octree Resolution", description="Octree resolution for 3D generation",
+        default=256, min=128, max=512)
+    bpy.types.Scene.copilot_hunyuan3d_num_inference_steps = IntProperty(
+        name="Inference Steps", description="Number of inference steps for 3D generation",
+        default=20, min=20, max=50)
+    bpy.types.Scene.copilot_hunyuan3d_guidance_scale = FloatProperty(
+        name="Guidance Scale", description="Guidance scale for 3D generation",
+        default=5.5, min=1.0, max=10.0)
+    bpy.types.Scene.copilot_hunyuan3d_texture = BoolProperty(
+        name="Generate Texture", description="Whether to generate texture for the 3D model", default=False)
+
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     print("[Copilot] Addon registered")
@@ -1484,8 +2880,34 @@ def unregister():
         del bpy.types.copilot_server
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
+
+    # Core
     del bpy.types.Scene.copilot_port
     del bpy.types.Scene.copilot_running
+
+    # PolyHaven
+    del bpy.types.Scene.copilot_use_polyhaven
+
+    # Hyper3D
+    del bpy.types.Scene.copilot_use_hyper3d
+    del bpy.types.Scene.copilot_hyper3d_mode
+    del bpy.types.Scene.copilot_hyper3d_api_key
+
+    # Sketchfab
+    del bpy.types.Scene.copilot_use_sketchfab
+    del bpy.types.Scene.copilot_sketchfab_api_key
+
+    # Hunyuan3D
+    del bpy.types.Scene.copilot_use_hunyuan3d
+    del bpy.types.Scene.copilot_hunyuan3d_mode
+    del bpy.types.Scene.copilot_hunyuan3d_secret_id
+    del bpy.types.Scene.copilot_hunyuan3d_secret_key
+    del bpy.types.Scene.copilot_hunyuan3d_api_url
+    del bpy.types.Scene.copilot_hunyuan3d_octree_resolution
+    del bpy.types.Scene.copilot_hunyuan3d_num_inference_steps
+    del bpy.types.Scene.copilot_hunyuan3d_guidance_scale
+    del bpy.types.Scene.copilot_hunyuan3d_texture
+
     print("[Copilot] Addon unregistered")
 
 

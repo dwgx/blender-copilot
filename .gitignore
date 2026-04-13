@@ -31,3 +31,6 @@ desktop.ini
 # Blender
 *.blend1
 *.blend2
+
+# Session exports
+session/
