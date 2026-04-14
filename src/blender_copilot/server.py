@@ -1256,6 +1256,9 @@ register_unity_tools(mcp, send_command)
 from .pipeline_tools import register_pipeline_tools
 register_pipeline_tools(mcp, send_command)
 
+from .sculpt_advanced_tools import register_sculpt_advanced_tools
+register_sculpt_advanced_tools(mcp, send_command)
+
 
 # =============================================================================
 #  Entry point

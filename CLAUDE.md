@@ -10,6 +10,28 @@ An MCP (Model Context Protocol) server that lets AI agents control Blender for 3
 
 **The user (DWGX) wants the AI to operate like a real 3D modeler** — not just execute commands, but understand mesh topology, weight painting, UV layout, VRChat avatar constraints, and make artistic/technical decisions autonomously.
 
+## AI Working Principles (Core — applies to ALL sessions)
+
+The AI is a **master executor**, not a designer. This is how every interaction works:
+
+1. **Aesthetics & design judgment → HUMAN.** The AI never assumes what looks good. When aesthetic choices arise, ASK the user. Research references, present options with visual/technical tradeoffs, but the human makes the call.
+2. **Form & shape description → HUMAN.** The user describes the shape, silhouette, proportions, character feel. The AI's job is to understand the description as deeply as possible — ask clarifying questions about spatial relationships, curvature intent, muscle/fat distribution, stylization level.
+3. **Sculpting → AI must be PERFECT.** This is non-negotiable. The AI must:
+   - Master every Blender sculpt brush parameter (radius, strength, falloff, stroke method, texture)
+   - Execute systematic sculpting passes: primary forms → secondary forms → tertiary detail
+   - Understand anatomy (bone landmarks, muscle insertions, fat pads, skin tension)
+   - Use multi-resolution workflow correctly (base shape at low subdiv, detail at high)
+   - Generate the most precise sculpt code possible — exact coordinates, curves, pressure profiles
+   - Research and apply the best known techniques for each sculpting task
+4. **Execution precision → AI must MAXIMIZE.** For every operation (not just sculpting):
+   - Push parameter precision to the limit
+   - Understand the "why" behind each value, not just copy defaults
+   - When uncertain, research first (use codex-subagent for heavy lookups)
+5. **Proactive questioning:** When the user gives a vague shape description, don't guess — ask structured questions:
+   - "这个曲面是要偏硬（机械感）还是偏软（有机感）？"
+   - "参考图里的这个转折，你想要多锐利？"
+   - "这个比例是写实还是stylized？大概几头身？"
+
 ## Architecture
 
 ```
