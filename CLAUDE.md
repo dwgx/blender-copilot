@@ -1,8 +1,12 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Blender Copilot — Agent Onboarding Guide
 
 ## What This Project Is
 
-An MCP (Model Context Protocol) server that lets AI agents control Blender for 3D modeling. 135 tools total.
+An MCP (Model Context Protocol) server that lets AI agents control Blender for 3D modeling. 185 tools total — full zero-to-published VRChat avatar pipeline.
 
 **The user (DWGX) wants the AI to operate like a real 3D modeler** — not just execute commands, but understand mesh topology, weight painting, UV layout, VRChat avatar constraints, and make artistic/technical decisions autonomously.
 
@@ -15,6 +19,12 @@ AI ←(stdio/MCP)→ server.py ←(TCP:9876)→ Blender Addon
 - `src/blender_copilot/server.py` — 102 MCP tools (core + asset integration). Entry point: `main()`.
 - `src/blender_copilot/vrc_tools.py` — 23 VRC avatar tools. Registered via `register_vrc_tools(mcp, send_command)`.
 - `src/blender_copilot/blender_master_tools.py` — 10 advanced mesh tools. Registered via `register_master_tools(mcp, send_command)`.
+- `src/blender_copilot/sculpt_bake_tools.py` — 14 sculpt/texture bake tools. Registered via `register_sculpt_bake_tools(mcp, send_command)`.
+- `src/blender_copilot/face_tracking_tools.py` — 10 ARKit 52 + Unified Expressions tools. Registered via `register_face_tracking_tools(mcp, send_command)`.
+- `src/blender_copilot/face_tracking_constants.py` — ARKit 52 names, displacement recipes, Unified Expressions, mappings.
+- `src/blender_copilot/rigify_tools.py` — 6 Rigify rig generation/VRC conversion tools. Registered via `register_rigify_tools(mcp, send_command)`.
+- `src/blender_copilot/unity_tools.py` — 15 Unity automation tools (C# EditorScript generation + CLI). Registered via `register_unity_tools(mcp, send_command)`.
+- `src/blender_copilot/pipeline_tools.py` — 5 end-to-end pipeline orchestration tools. Registered via `register_pipeline_tools(mcp, send_command)`.
 - `src/blender_copilot/vrc_constants.py` — VRChat performance rank limits, bone mappings.
 - `addon/__init__.py` — Blender-side TCP server, 112 `cmd_*` methods, UI panels for PolyHaven/Sketchfab/Hyper3D/Hunyuan3D.
 - `blender_exec.py` — Standalone helper for running Python in Blender headless.

@@ -1241,6 +1241,21 @@ register_vrc_tools(mcp, send_command)
 from .blender_master_tools import register_master_tools
 register_master_tools(mcp, send_command)
 
+from .sculpt_bake_tools import register_sculpt_bake_tools
+register_sculpt_bake_tools(mcp, send_command)
+
+from .face_tracking_tools import register_face_tracking_tools
+register_face_tracking_tools(mcp, send_command)
+
+from .rigify_tools import register_rigify_tools
+register_rigify_tools(mcp, send_command)
+
+from .unity_tools import register_unity_tools
+register_unity_tools(mcp, send_command)
+
+from .pipeline_tools import register_pipeline_tools
+register_pipeline_tools(mcp, send_command)
+
 
 # =============================================================================
 #  Entry point

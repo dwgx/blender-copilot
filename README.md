@@ -1,8 +1,8 @@
 # Blender Copilot
 
-**The most comprehensive Blender MCP server — AI-powered 3D creation with 135 tools.**
+**The most comprehensive Blender MCP server — AI-powered 3D creation with 185 tools. Full zero-to-published VRChat avatar pipeline.**
 
-最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，135 種工具。
+最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，185 種工具。完整的從零到上傳 VRChat Avatar 流水線。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -73,6 +73,64 @@
 | boolean_cleanup | Post-boolean topology repair |
 | create_facial_topology | Face topology from landmarks |
 
+### Sculpt & Texture Bake (14 tools in `sculpt_bake_tools.py`)
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| Sculpt Mode | 6 | Enter sculpt, brush strokes, masking, remesh, detail flood, face set extract |
+| Shape Keys | 2 | Sculpt to shape key, cloth sim to shape key |
+| Texture Bake | 4 | Normal map, AO, diffuse atlas, general bake (Cycles) |
+| Paint & Sim | 2 | Texture paint fill, cloth simulation for modeling |
+
+### Face Tracking — ARKit 52 + Unified (10 tools in `face_tracking_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| ft_setup_face_vertex_groups | Auto-detect facial landmarks → 28 vertex groups |
+| ft_create_arkit_shapes | Create all 52 ARKit blend shapes (procedural/template/from_existing) |
+| ft_create_unified_expressions | Generate 70+ VRCFT Unified Expressions |
+| ft_sculpt_shape_key | AI-guided shape key sculpting via vertex displacement |
+| ft_validate_shapes | Validate against ARKit/Unified standard |
+| ft_mirror_shape_key | Mirror Left↔Right shape keys |
+| ft_combine_shape_keys | Combine multiple shapes with weights |
+| ft_setup_tongue_tracking | Tongue bone chain + blend shapes |
+| ft_setup_eye_tracking_full | Extended eye tracking (12 shapes) |
+| ft_export_shape_key_report | Shape key report (JSON/markdown) |
+
+### Rigify Integration (6 tools in `rigify_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| rigify_create_metarig | Generate Rigify meta-rig (human/quadruped/bird/etc.) |
+| rigify_fit_metarig | Auto-fit meta-rig to mesh proportions (proportional/snap) |
+| rigify_generate_rig | Generate production rig from meta-rig |
+| rigify_to_vrc | Convert DEF-bones to VRC/Unity Humanoid naming |
+| rigify_add_face_rig | Add face rig bones (full/basic/eyes_only) |
+| rigify_configure_ik | Configure IK for VRC full-body tracking (3/6/10-point) |
+
+### Unity Automation (15 tools in `unity_tools.py`)
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| Project Setup | 1 | Verify Unity project, VRC SDK presence |
+| Import | 1 | Import FBX with humanoid rig, extract materials/textures |
+| Avatar Config | 2 | Avatar Descriptor setup, pipeline manager |
+| Expressions | 2 | Expression Menu and Parameters .asset generation |
+| Animation | 3 | Animator controller, animation clips, gesture layer |
+| Shaders | 2 | Configure Poiyomi/lilToon/UTS2, material preset generation |
+| Dynamics | 2 | PhysBone components, ContactSender/Receiver |
+| Build & Publish | 2 | Build validation, publish to VRChat (CLI + GUI fallback) |
+
+### Pipeline Orchestration (5 tools in `pipeline_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| pipeline_avatar_from_mesh | Full Blender-side: mesh → armature → shape keys → FBX |
+| pipeline_blender_to_unity | Full Unity-side: FBX → import → descriptor → build |
+| pipeline_face_tracking_setup | Complete: vertex groups → ARKit 52 → Unified → validate |
+| pipeline_validate_full | Comprehensive go/no-go report for VRC upload |
+| pipeline_generate_blueprint | Export all config JSONs alongside FBX |
+
 ### Blender Addon (112 commands, 2915 lines)
 
 The addon (`addon/__init__.py`) runs inside Blender and handles all commands via TCP.
@@ -93,12 +151,22 @@ Includes full UI panels for:
 └─────────────────┘                  └──────────────────┘                └──────────────┘
                                      │
                                      ├── vrc_tools.py (23 VRC tools)
-                                     └── blender_master_tools.py (10 advanced tools)
+                                     ├── blender_master_tools.py (10 advanced tools)
+                                     ├── sculpt_bake_tools.py (14 sculpt/bake tools)
+                                     ├── face_tracking_tools.py (10 ARKit/Unified tools)
+                                     ├── rigify_tools.py (6 Rigify tools)
+                                     ├── unity_tools.py (15 Unity automation tools)
+                                     └── pipeline_tools.py (5 orchestration tools)
 ```
 
-- **MCP Server** (`src/blender_copilot/server.py`): FastMCP server exposing 135 tools via stdio transport
-- **VRC Tools** (`src/blender_copilot/vrc_tools.py`): VRChat avatar pipeline (registered via `register_vrc_tools`)
-- **Master Tools** (`src/blender_copilot/blender_master_tools.py`): Advanced mesh operations (registered via `register_master_tools`)
+- **MCP Server** (`server.py`): FastMCP server exposing 185 tools via stdio transport
+- **VRC Tools** (`vrc_tools.py`): VRChat avatar pipeline — validation, rigging, visemes, PhysBones, export
+- **Master Tools** (`blender_master_tools.py`): Advanced mesh — BMesh, retopology, procedural generation
+- **Sculpt & Bake** (`sculpt_bake_tools.py`): Sculpt mode, brush strokes, texture baking (normal/AO/diffuse)
+- **Face Tracking** (`face_tracking_tools.py`): ARKit 52 blend shapes, VRCFT Unified Expressions, tongue/eye tracking
+- **Rigify** (`rigify_tools.py`): Meta-rig generation, fitting, VRC bone conversion, IK configuration
+- **Unity** (`unity_tools.py`): C# EditorScript generation, Unity CLI automation, avatar descriptor, animator, shaders
+- **Pipeline** (`pipeline_tools.py`): End-to-end orchestration — mesh-to-FBX, FBX-to-Unity, face tracking setup
 - **Blender Addon** (`addon/__init__.py`): TCP socket server + CommandExecutor with `cmd_` dispatch pattern
 
 ## Installation / 安裝
