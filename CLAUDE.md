@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Is
 
-An MCP (Model Context Protocol) server that lets AI agents control Blender for 3D modeling. 206 tools total — full zero-to-published VRChat avatar pipeline.
+An MCP (Model Context Protocol) server that lets AI agents control Blender for 3D modeling. **298 tools** total — the most comprehensive Blender MCP server available. Full zero-to-published VRChat avatar pipeline plus complete 3D workflow automation.
 
 **The user (DWGX) wants the AI to operate like a real 3D modeler** — not just execute commands, but understand mesh topology, weight painting, UV layout, VRChat avatar constraints, and make artistic/technical decisions autonomously.
 
@@ -52,6 +52,19 @@ AI ←(stdio/MCP)→ server.py ←(TCP:9876)→ Blender Addon
 - `unity_tools.py` — 15 Unity automation tools (C# EditorScript generation + CLI). `register_unity_tools(mcp, send_command)`.
 - `pipeline_tools.py` — 5 end-to-end pipeline orchestration tools. `register_pipeline_tools(mcp, send_command)`.
 - `blender_manager.py` — 6 Blender process management tools (launch/status/open/save/new/quit). `register_blender_manager_tools(mcp, send_command)`. Auto-detects Blender executable, launches with addon auto-start via `scripts/blender_auto_start.py`.
+- `script_tools.py` — 4 headless script execution tools (JSON→bpy, headless Blender subprocess). `register_script_tools(mcp, send_command)`.
+- `render_tools.py` — 8 render preset/management tools (7 presets, HDRI, animation render). `register_render_tools(mcp, send_command)`.
+- `scene_tools.py` — 9 scene profile/management tools (10 profiles, turntable, collections, cleanup). `register_scene_tools(mcp, send_command)`.
+- `modifier_tools.py` — 9 modifier tools with parameter validation registry (15 modifier types). `register_modifier_tools(mcp, send_command)`.
+- `animation_tools.py` — 9 animation tools (keyframes, interpolation, bounce/orbit presets). `register_animation_tools(mcp, send_command)`.
+- `material_tools.py` — 7 material tools (12 PBR presets, texture assignment). `register_material_tools(mcp, send_command)`.
+- `uv_tools.py` — 8 UV mapping tools (smart unwrap, projections, seams, packing). `register_uv_tools(mcp, send_command)`.
+- `curve_tools.py` — 7 curve tools (Bezier, NURBS, paths, 3D text, conversion). `register_curve_tools(mcp, send_command)`.
+- `physics_tools.py` — 7 physics tools (rigid body, cloth, particles, soft body, baking). `register_physics_tools(mcp, send_command)`.
+- `armature_tools.py` — 7 armature/bone tools (create, add bones, chains, constraints, auto-weight). `register_armature_tools(mcp, send_command)`.
+- `io_tools.py` — 6 file I/O tools (FBX, glTF, OBJ, STL, USD import/export). `register_io_tools(mcp, send_command)`.
+- `lighting_tools.py` — 5 lighting tools (add/modify lights, 3-point rig, studio setup). `register_lighting_tools(mcp, send_command)`.
+- `measurement_tools.py` — 6 measurement/verification tools (distance, dimensions, overlap, symmetry, mesh quality). `register_measurement_tools(mcp, send_command)`.
 - `vrc_constants.py` — VRChat performance rank limits, bone mappings.
 
 ### Blender Addon Side (`addon/`)

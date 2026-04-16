@@ -23,7 +23,7 @@ logger = logging.getLogger("BlenderCopilot")
 
 mcp = FastMCP(
     "Blender Copilot",
-    instructions="The most comprehensive Blender MCP server - 210 AI-powered 3D creation tools",
+    instructions="The most comprehensive Blender MCP server - 298 AI-powered 3D creation tools",
 )
 
 BLENDER_HOST = os.environ.get("BLENDER_HOST", "localhost")
@@ -1448,6 +1448,42 @@ register_blender_manager_tools(mcp, send_command)
 
 from .script_tools import register_script_tools
 register_script_tools(mcp, send_command)
+
+from .render_tools import register_render_tools
+register_render_tools(mcp, send_command)
+
+from .scene_tools import register_scene_tools
+register_scene_tools(mcp, send_command)
+
+from .modifier_tools import register_modifier_tools
+register_modifier_tools(mcp, send_command)
+
+from .animation_tools import register_animation_tools
+register_animation_tools(mcp, send_command)
+
+from .material_tools import register_material_tools
+register_material_tools(mcp, send_command)
+
+from .uv_tools import register_uv_tools
+register_uv_tools(mcp, send_command)
+
+from .curve_tools import register_curve_tools
+register_curve_tools(mcp, send_command)
+
+from .physics_tools import register_physics_tools
+register_physics_tools(mcp, send_command)
+
+from .armature_tools import register_armature_tools
+register_armature_tools(mcp, send_command)
+
+from .io_tools import register_io_tools
+register_io_tools(mcp, send_command)
+
+from .lighting_tools import register_lighting_tools
+register_lighting_tools(mcp, send_command)
+
+from .measurement_tools import register_measurement_tools
+register_measurement_tools(mcp, send_command)
 
 
 # =============================================================================

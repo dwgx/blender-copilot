@@ -1,8 +1,8 @@
 # Blender Copilot
 
-**The most comprehensive Blender MCP server — AI-powered 3D creation with 185 tools. Full zero-to-published VRChat avatar pipeline.**
+**The most comprehensive Blender MCP server — AI-powered 3D creation with 298 tools across 23 modules. Full zero-to-published VRChat avatar pipeline.**
 
-最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，185 種工具。完整的從零到上傳 VRChat Avatar 流水線。
+最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，298 種工具橫跨 23 模組。完整的從零到上傳 VRChat Avatar 流水線。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -120,6 +120,163 @@
 | Shaders | 2 | Configure Poiyomi/lilToon/UTS2, material preset generation |
 | Dynamics | 2 | PhysBone components, ContactSender/Receiver |
 | Build & Publish | 2 | Build validation, publish to VRChat (CLI + GUI fallback) |
+
+### Script Execution (4 tools in `script_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| execute_script_headless | Run Python in headless Blender subprocess (bypasses TCP timeout) |
+| execute_script_on_file | Execute code on an existing .blend file |
+| build_scene_from_json | JSON scene description → bpy script → headless execute |
+| generate_scene_script | Generate bpy script from JSON without executing |
+
+### Render Presets (8 tools in `render_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| render_list_presets | List 7 presets (cycles/eevee preview/default/high, workbench) |
+| render_apply_preset | One-click render preset application |
+| render_set_output | Configure output path, format, quality |
+| render_still | Render single frame |
+| render_animation | Render animation (image sequence or FFMPEG video) |
+| render_set_camera | Set/create active render camera |
+| render_get_settings | Get current render config |
+| render_set_world | Set world background (solid color or HDRI) |
+
+### Scene Profiles (9 tools in `scene_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| scene_list_profiles | List 10 profiles (preview to 4K, Instagram, YouTube, VRC) |
+| scene_apply_profile | Apply resolution/engine/samples profile |
+| scene_setup_turntable | 360° camera turntable animation |
+| scene_create_collection | Create collections with color tags |
+| scene_move_to_collection | Move objects between collections |
+| scene_cleanup | Remove unused materials/meshes/images |
+| scene_stats | Comprehensive scene statistics |
+| scene_set_units | Configure unit system (metric/imperial) |
+| scene_set_visibility | Control object viewport/render visibility |
+
+### Modifier Registry (9 tools in `modifier_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| modifier_list_types | List 15 modifier types with validated parameters |
+| modifier_add | Add modifier with type-safe parameter validation |
+| modifier_apply | Apply (finalize) a modifier |
+| modifier_remove | Remove modifier without applying |
+| modifier_list | List all modifiers on an object |
+| modifier_reorder | Move modifier in stack |
+| modifier_apply_all | Apply all modifiers at once |
+| modifier_batch_add | Add same modifier to multiple objects |
+| modifier_preset_smooth_shade | One-click SubD + Smooth + WeightedNormal |
+
+### Animation (9 tools in `animation_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| anim_insert_keyframe | Insert keyframe on any property |
+| anim_insert_keyframes_batch | Insert multiple keyframes at once |
+| anim_delete_keyframe | Delete keyframe |
+| anim_clear_all | Clear all animation from object |
+| anim_set_interpolation | Set interpolation type (Bezier, Linear, etc.) |
+| anim_set_frame_range | Set frame range and FPS |
+| anim_bounce | Bouncing animation preset |
+| anim_orbit | Orbital/circular motion preset |
+| anim_get_info | Get animation data summary |
+
+### Materials (7 tools in `material_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| material_list_presets | List 12 presets (metals, glass, skin, fabric, etc.) |
+| material_create_preset | Create material from preset |
+| material_create_pbr | Full PBR material with all parameters |
+| material_assign | Assign material to object |
+| material_list | List materials on object or in scene |
+| material_duplicate | Duplicate existing material |
+| material_set_texture | Add image texture (albedo, normal, roughness, etc.) |
+
+### UV Mapping (8 tools in `uv_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| uv_smart_unwrap | Smart UV Project (auto, angle-based) |
+| uv_unwrap | Standard unwrap (follows seams) |
+| uv_project_from_view | Cube/cylinder/sphere projection |
+| uv_mark_seams | Mark UV seams (manual or auto by angle) |
+| uv_pack_islands | Pack UV islands efficiently |
+| uv_get_info | Get UV layer info |
+| uv_add_layer | Add new UV layer |
+| uv_remove_layer | Remove UV layer |
+
+### Curves (7 tools in `curve_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| curve_create_bezier | Create Bezier curve with custom points |
+| curve_create_nurbs | Create NURBS curve |
+| curve_create_path | Create NURBS path (for follow-path) |
+| curve_create_circle | Create circle curve (bevel profile) |
+| curve_create_text | Create 3D text object |
+| curve_to_mesh | Convert curve to mesh |
+| curve_set_bevel | Set curve bevel (tube/pipe effect) |
+
+### Physics (7 tools in `physics_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| physics_add_rigid_body | Rigid body physics (active/passive) |
+| physics_add_cloth | Cloth simulation |
+| physics_add_collision | Collision surface for cloth/particles |
+| physics_add_particle_system | Particle emitter |
+| physics_add_soft_body | Soft body physics |
+| physics_bake | Bake all physics simulations |
+| physics_remove | Remove physics from object |
+
+### Armature & Bones (7 tools in `armature_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| armature_create | Create new armature |
+| armature_add_bone | Add individual bone |
+| armature_add_bones_chain | Add connected bone chain (spine, arm, finger) |
+| armature_add_constraint | Add pose bone constraint (IK, Copy Rot, etc.) |
+| armature_auto_weight | Parent mesh to armature with automatic weights |
+| armature_list_bones | List all bones with hierarchy |
+| armature_set_pose | Set bone rotations/positions |
+
+### File I/O (6 tools in `io_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| io_import_file | Import any 3D file (auto-detect: FBX, OBJ, glTF, STL, USD, PLY, ABC) |
+| io_export_fbx | Export FBX (VRChat-optimized defaults) |
+| io_export_gltf | Export glTF/GLB (web-ready) |
+| io_export_obj | Export OBJ (universal mesh) |
+| io_export_stl | Export STL (3D printing) |
+| io_export_usd | Export USD (Pixar format) |
+
+### Lighting (5 tools in `lighting_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| light_add | Add any light type (point, sun, spot, area) |
+| light_setup_three_point | Classic 3-point lighting rig |
+| light_setup_studio | Professional studio softbox setup |
+| light_list | List all lights with properties |
+| light_modify | Modify existing light properties |
+
+### Measurement & Verification (6 tools in `measurement_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| measure_distance | Distance between objects |
+| measure_dimensions | Object bounding box and mesh stats |
+| measure_overlap | Bounding box overlap detection |
+| measure_symmetry | Mesh symmetry analysis |
+| mesh_quality_check | Non-manifold, loose verts, degenerate faces, dupes |
+| measure_alignment | Check multi-object axis alignment |
 
 ### Pipeline Orchestration (5 tools in `pipeline_tools.py`)
 
