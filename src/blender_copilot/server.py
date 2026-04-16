@@ -8,43 +8,157 @@ through the Model Context Protocol (MCP).
 
 import json
 import socket
+import subprocess
 import sys
 import os
+import tempfile
 import base64
+import logging
 from typing import Any
 from mcp.server.fastmcp import FastMCP
 
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("BlenderCopilot")
+
 mcp = FastMCP(
     "Blender Copilot",
-    description="The most comprehensive Blender MCP server - AI-powered 3D creation with 70+ tools",
+    instructions="The most comprehensive Blender MCP server - 210 AI-powered 3D creation tools",
 )
 
 BLENDER_HOST = os.environ.get("BLENDER_HOST", "localhost")
 BLENDER_PORT = int(os.environ.get("BLENDER_PORT", "9876"))
+SOCKET_TIMEOUT = 180  # Match blender-mcp's timeout
+
+
+# ─── Persistent connection (merged from ahujasid/blender-mcp) ───────────────
+class BlenderConnection:
+    """Persistent TCP connection to Blender addon, with auto-reconnect."""
+
+    def __init__(self, host: str = "localhost", port: int = 9876):
+        self.host = host
+        self.port = port
+        self._sock: socket.socket | None = None
+
+    @property
+    def connected(self) -> bool:
+        return self._sock is not None
+
+    def connect(self) -> bool:
+        if self._sock:
+            return True
+        try:
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._sock.connect((self.host, self.port))
+            logger.info(f"Connected to Blender at {self.host}:{self.port}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to Blender: {e}")
+            self._sock = None
+            return False
+
+    def disconnect(self):
+        if self._sock:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+
+    def send_and_receive(self, payload: bytes) -> bytes:
+        """Send payload and receive full JSON response with chunked parsing."""
+        if not self._sock:
+            raise ConnectionError("Not connected")
+        self._sock.settimeout(SOCKET_TIMEOUT)
+        self._sock.sendall(payload)
+
+        chunks = []
+        try:
+            while True:
+                chunk = self._sock.recv(65536)
+                if not chunk:
+                    if not chunks:
+                        raise ConnectionError("Connection closed before receiving data")
+                    break
+                chunks.append(chunk)
+                # Check for complete JSON
+                try:
+                    data = b"".join(chunks)
+                    json.loads(data.decode("utf-8"))
+                    return data
+                except json.JSONDecodeError:
+                    continue
+        except socket.timeout:
+            logger.warning("Socket timeout during receive")
+            if chunks:
+                return b"".join(chunks)
+            raise
+        except (ConnectionError, BrokenPipeError, ConnectionResetError) as e:
+            logger.error(f"Connection error during receive: {e}")
+            self.disconnect()
+            raise
+
+        return b"".join(chunks) if chunks else b""
+
+
+_conn = BlenderConnection(BLENDER_HOST, BLENDER_PORT)
 
 
 def send_command(command_type: str, params: dict | None = None) -> dict:
-    """Send a command to the Blender Copilot addon via TCP and return the result."""
+    """Send a command to the Blender Copilot addon via TCP.
+
+    Uses persistent connection with auto-reconnect on failure.
+    Falls back to new connection per command if persistent fails.
+    """
     payload = {"type": command_type}
     if params:
-        # Strip None values so Blender gets clean kwargs
         payload["params"] = {k: v for k, v in params.items() if v is not None}
     data = json.dumps(payload).encode("utf-8")
 
+    # Try persistent connection first
+    for attempt in range(2):
+        try:
+            if not _conn.connected:
+                if not _conn.connect():
+                    raise ConnectionRefusedError("Cannot connect")
+            raw = _conn.send_and_receive(data)
+            if not raw:
+                raise Exception("Empty response from Blender")
+            resp = json.loads(raw.decode("utf-8"))
+            if resp.get("status") == "error":
+                raise Exception(resp.get("message", "Unknown error from Blender"))
+            return resp.get("result", resp)
+        except (ConnectionError, BrokenPipeError, ConnectionResetError, OSError):
+            logger.info(f"Connection lost (attempt {attempt+1}/2), reconnecting...")
+            _conn.disconnect()
+            if attempt == 0:
+                continue
+            # Fallback: one-shot connection
+            return _send_command_oneshot(data)
+        except socket.timeout:
+            _conn.disconnect()
+            raise Exception(
+                f"Blender command timed out after {SOCKET_TIMEOUT}s. "
+                "For heavy operations, use run_blender_script() instead."
+            )
+
+    raise Exception("Failed to communicate with Blender after retries.")
+
+
+def _send_command_oneshot(data: bytes) -> dict:
+    """Fallback: single-use TCP connection (original approach)."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(120)
+        sock.settimeout(SOCKET_TIMEOUT)
         sock.connect((BLENDER_HOST, BLENDER_PORT))
         sock.sendall(data)
 
-        # Read response
         chunks = []
         while True:
             chunk = sock.recv(65536)
             if not chunk:
                 break
             chunks.append(chunk)
-            # Try to parse - if valid JSON we're done
             try:
                 json.loads(b"".join(chunks).decode("utf-8"))
                 break
@@ -53,18 +167,88 @@ def send_command(command_type: str, params: dict | None = None) -> dict:
         sock.close()
 
         if not chunks:
-            return {"status": "error", "message": "Empty response from Blender"}
+            return {"status": "error", "message": "Empty response"}
         resp = json.loads(b"".join(chunks).decode("utf-8"))
         if resp.get("status") == "error":
-            raise Exception(resp.get("message", "Unknown error from Blender"))
+            raise Exception(resp.get("message", "Unknown error"))
         return resp.get("result", resp)
     except ConnectionRefusedError:
         raise Exception(
-            "Cannot connect to Blender. Make sure Blender is running "
-            "and the Copilot addon is started (port {}).".format(BLENDER_PORT)
+            f"Cannot connect to Blender. Ensure addon is running on port {BLENDER_PORT}."
         )
-    except socket.timeout:
-        raise Exception("Blender command timed out after 120 seconds.")
+
+
+# ─── Script execution fallback (merged from HKUDS/CLI-Anything) ────────────
+def _find_blender_exe() -> str | None:
+    """Find Blender executable on the system."""
+    import shutil
+    # Check common locations on Windows
+    for base in [
+        os.environ.get("BLENDER_PATH", ""),
+        r"C:\Program Files\Blender Foundation",
+        r"D:\Software\Blender Foundation",
+        r"D:\Program Files\Blender Foundation",
+    ]:
+        if base and os.path.isdir(base):
+            for entry in os.listdir(base):
+                exe = os.path.join(base, entry, "blender.exe")
+                if os.path.isfile(exe):
+                    return exe
+    return shutil.which("blender")
+
+
+def run_blender_script(code: str, timeout: int = 300) -> dict:
+    """Execute Python code in Blender headless via subprocess.
+
+    Bypasses TCP entirely — for heavy mesh operations that timeout over socket.
+    Merged from CLI-Anything's blender_backend approach.
+    """
+    blender = _find_blender_exe()
+    if not blender:
+        raise RuntimeError("Blender executable not found on system")
+
+    # Write code to temp file
+    with tempfile.NamedTemporaryFile(
+        suffix=".py", mode="w", delete=False, prefix="copilot_exec_",
+        encoding="utf-8"
+    ) as f:
+        # Wrap code to capture result as JSON
+        wrapper = f'''import bpy, json, sys
+try:
+    result = None
+{_indent(code, 4)}
+    out = {{"status": "success", "result": str(result) if result is not None else "ok"}}
+except Exception as e:
+    out = {{"status": "error", "message": str(e)}}
+print("__COPILOT_RESULT__" + json.dumps(out))
+'''
+        f.write(wrapper)
+        script_path = f.name
+
+    try:
+        proc = subprocess.run(
+            [blender, "--background", "--python", script_path],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        # Extract result from stdout
+        for line in proc.stdout.splitlines():
+            if line.startswith("__COPILOT_RESULT__"):
+                return json.loads(line[len("__COPILOT_RESULT__"):])
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Blender script failed (exit {proc.returncode}): "
+                f"{proc.stderr[-500:] if proc.stderr else 'no stderr'}"
+            )
+        return {"status": "success", "result": proc.stdout[-500:]}
+    finally:
+        os.unlink(script_path)
+
+
+def _indent(code: str, spaces: int) -> str:
+    """Indent all lines of code by given spaces."""
+    prefix = " " * spaces
+    return "\n".join(prefix + line for line in code.splitlines())
 
 
 # =============================================================================
@@ -1258,6 +1442,12 @@ register_pipeline_tools(mcp, send_command)
 
 from .sculpt_advanced_tools import register_sculpt_advanced_tools
 register_sculpt_advanced_tools(mcp, send_command)
+
+from .blender_manager import register_blender_manager_tools
+register_blender_manager_tools(mcp, send_command)
+
+from .script_tools import register_script_tools
+register_script_tools(mcp, send_command)
 
 
 # =============================================================================
