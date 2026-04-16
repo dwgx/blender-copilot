@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Is
 
-An MCP (Model Context Protocol) server that lets AI agents control Blender for 3D modeling. **298 tools** total — the most comprehensive Blender MCP server available. Full zero-to-published VRChat avatar pipeline plus complete 3D workflow automation.
+An MCP (Model Context Protocol) server that lets AI agents control Blender for 3D modeling. **308 tools** total — the most comprehensive Blender MCP server available. Full zero-to-published VRChat avatar pipeline plus complete 3D workflow automation.
 
 **The user (DWGX) wants the AI to operate like a real 3D modeler** — not just execute commands, but understand mesh topology, weight painting, UV layout, VRChat avatar constraints, and make artistic/technical decisions autonomously.
 

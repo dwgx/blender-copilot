@@ -23,7 +23,7 @@ logger = logging.getLogger("BlenderCopilot")
 
 mcp = FastMCP(
     "Blender Copilot",
-    instructions="The most comprehensive Blender MCP server - 298 AI-powered 3D creation tools",
+    instructions="The most comprehensive Blender MCP server - 308 AI-powered 3D creation tools",
 )
 
 BLENDER_HOST = os.environ.get("BLENDER_HOST", "localhost")
@@ -1484,6 +1484,12 @@ register_lighting_tools(mcp, send_command)
 
 from .measurement_tools import register_measurement_tools
 register_measurement_tools(mcp, send_command)
+
+from .geometry_nodes_tools import register_geometry_nodes_tools
+register_geometry_nodes_tools(mcp, send_command)
+
+from .viewport_tools import register_viewport_tools
+register_viewport_tools(mcp, send_command)
 
 
 # =============================================================================

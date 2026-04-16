@@ -1,8 +1,8 @@
 # Blender Copilot
 
-**The most comprehensive Blender MCP server — AI-powered 3D creation with 298 tools across 23 modules. Full zero-to-published VRChat avatar pipeline.**
+**The most comprehensive Blender MCP server — AI-powered 3D creation with 308 tools across 25 modules. Full zero-to-published VRChat avatar pipeline.**
 
-最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，298 種工具橫跨 23 模組。完整的從零到上傳 VRChat Avatar 流水線。
+最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，308 種工具橫跨 25 模組。完整的從零到上傳 VRChat Avatar 流水線。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
