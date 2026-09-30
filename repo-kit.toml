@@ -1,0 +1,14 @@
+# repo-kit · 本仓库的 banner 规格
+# 改这个文件，workflow 会重新渲染 docs/assets/banner*.svg 与 README 区块
+# 生成器：https://github.com/dwgx/DWGX/tree/main/repo-kit
+owner = "dwgx"
+
+[[repo]]
+name = "blender-copilot"
+style = "iso"
+tagline = "Blender MCP server · AI 3D 创作、自动化与 VRChat 形象流程"
+install = "uv pip install -e ."
+lang = "Python"
+license = "MIT"
+topics = ["3d-modeling", "ai-agents", "automation", "blender", "blender-addon"]
+links = [{ label = "docs", url = "https://github.com/dwgx/blender-copilot/tree/master/docs" }, { label = "issues", url = "https://github.com/dwgx/blender-copilot/issues" }]

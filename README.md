@@ -1,5 +1,24 @@
 # Blender Copilot
 
+<!-- dwgx-banner:BEGIN -->
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner.svg?t=c7b72c8c8800" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner-light.svg?t=c7b72c8c8800" />
+  <img src="docs/assets/banner.svg?t=c7b72c8c8800" width="100%" alt="blender-copilot — Blender MCP server · AI 3D 创作、自动化与 VRChat 形象流程" />
+</picture>
+
+<br/>
+
+Python · MIT · ★6
+
+[docs](https://github.com/dwgx/blender-copilot/tree/master/docs) · [issues](https://github.com/dwgx/blender-copilot/issues)
+
+</div>
+<!-- dwgx-banner:END -->
+
+
 **The most comprehensive Blender MCP server — AI-powered 3D creation with 308 tools across 25 modules. Full zero-to-published VRChat avatar pipeline.**
 
 最全面的 Blender MCP 伺服器 — AI 驅動的 3D 創作，308 種工具橫跨 25 模組。完整的從零到上傳 VRChat Avatar 流水線。
