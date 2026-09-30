@@ -4,9 +4,9 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner.svg?t=c7b72c8c8800" />
-  <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner-light.svg?t=c7b72c8c8800" />
-  <img src="docs/assets/banner.svg?t=c7b72c8c8800" width="100%" alt="blender-copilot — Blender MCP server · AI 3D 创作、自动化与 VRChat 形象流程" />
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner.svg?t=26e0acc3dad5" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner-light.svg?t=26e0acc3dad5" />
+  <img src="docs/assets/banner.svg?t=26e0acc3dad5" width="100%" alt="blender-copilot — Blender MCP server · AI 3D 创作、自动化与 VRChat 形象流程" />
 </picture>
 
 <br/>
